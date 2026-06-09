@@ -1,0 +1,40 @@
+from fastapi import FastAPI
+from fastapi import APIRouter
+from app.config import settings
+from app.api.ingest import router as ingest_router
+from app.api.parser import router as parser_router
+from app.api.chunk import router as chunk_router
+from app.api.embeddings import router as embeddings_router
+from app.api.qdrant import router as qdrant_router
+from app.api.index import router as index_router
+from app.api.chat import router as chat_router
+from app.api.tree import router as tree_router
+
+app = FastAPI(
+    title="CodeGraphAI",
+    version="1.0.0"
+)
+
+app.include_router(ingest_router)
+app.include_router(parser_router)
+app.include_router(chunk_router)
+app.include_router(embeddings_router)
+app.include_router(qdrant_router)
+app.include_router(index_router)
+app.include_router(chat_router)
+app.include_router(tree_router)
+router = APIRouter()
+@app.get("/")
+def root():
+    return {
+        "message": "CodeGraphAI Backend Running"
+    }
+
+
+@app.get("/config")
+def show_config():
+    return {
+        "qdrant_url": settings.qdrant_url,
+        "collection": settings.collection_name
+    }
+
