@@ -56,25 +56,15 @@ def code_chunks():
 
 @router.get("/graph")
 def graph():
-
-    graph = build_repository_graph(
-        "repositories/fastapi"
-    )
-
-    save_graph(graph)
-
-    return {
-        "nodes": len(
-            graph["nodes"]
-        ),
-        "edges": len(
-            graph["edges"]
-        ),
-        "sample_nodes":
-        graph["nodes"][:10],
-        "sample_edges":
-        graph["edges"][:10]
-    }
+    from app.services.graph_retriever import load_graph
+    try:
+        return load_graph()
+    except Exception as e:
+        return {
+            "error": f"Failed to load active graph: {str(e)}",
+            "nodes": [],
+            "edges": []
+        }
 
 from fastapi import Query
 

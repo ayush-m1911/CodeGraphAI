@@ -1,13 +1,14 @@
 import json
 
 
-GRAPH_PATH = "graphs/fastapi_graph.json"
-
-
 def load_graph():
+    import os
+    path = "graphs/active_graph.json"
+    if not os.path.exists(path):
+        path = "graphs/fastapi_graph.json"
 
     with open(
-        GRAPH_PATH,
+        path,
         "r",
         encoding="utf-8"
     ) as f:

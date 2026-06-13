@@ -33,19 +33,11 @@ def chat(
     "sources": [
         {
             "file_path": c["file_path"],
-            "symbol_name": c.get(
-                "symbol_name"
-            ),
-            "chunk_type": c.get(
-                "chunk_type"
-            ),
-            "relation": c.get(
-                "relation"
-            ),
-            "score": c.get(
-                "score",
-                "graph"
-            )
+            "symbol_name": c.get("symbol_name"),
+            "chunk_type": c.get("chunk_type"),
+            "relation": c.get("relation"),
+            "score": c.get("score", "graph"),
+            "text": c.get("text", "")
         }
         for c in context
     ]

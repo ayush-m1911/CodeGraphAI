@@ -9,9 +9,17 @@ import uuid
 from app.config import settings
 
 
-client = QdrantClient(
-    url=settings.qdrant_url
-)
+try:
+    client = QdrantClient(
+        url=settings.qdrant_url,
+        timeout=3.0
+    )
+    client.get_collections()
+    print(f"Successfully connected to Qdrant server at {settings.qdrant_url}")
+except Exception as e:
+    print(f"Could not connect to Qdrant server at {settings.qdrant_url}: {e}")
+    print("Falling back to local persistent storage Qdrant client (path='qdrant_storage').")
+    client = QdrantClient(path="qdrant_storage")
 
 COLLECTION_NAME = settings.collection_name
 
