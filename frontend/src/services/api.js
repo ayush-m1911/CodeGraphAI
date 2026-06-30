@@ -1,3 +1,17 @@
+/**
+ * Purpose:
+ * Axios-based API client wrappers connecting the React frontend to the FastAPI backend service.
+ *
+ * Role in CodeGraphAI:
+ * Handles HTTP request packaging and response mapping for all backend endpoint interactions.
+ *
+ * Key Responsibilities:
+ * - Configure Axios instances with host routes (defaulting to localhost:8000) and headers.
+ * - Expose POST /index endpoint integrations for repository cloning and indexing.
+ * - Expose POST /chat endpoint integration for hybrid-retrieval chat.
+ * - Expose GET /graph endpoint integration to load constructed knowledge graphs.
+ */
+
 import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:8000';

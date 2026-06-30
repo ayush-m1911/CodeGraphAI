@@ -1,3 +1,23 @@
+"""
+Purpose:
+Implements retrieval strategies for obtaining codebase context.
+
+Role in CodeGraphAI:
+Decides whether to perform an exact symbol lookup or fallback to semantic vector search based on the query structure.
+It bridges raw user input to the database level, retrieving initial source-code anchors.
+
+Key Responsibilities:
+* Parse questions with regex to extract capitalised words (PascalCase symbols).
+* Check the vector database for exact symbol payload matching.
+* If symbol matching succeeds, return the exact definition chunks immediately.
+* If no exact match is found, compute query vector embeddings and perform standard semantic cosine similarity search.
+
+Interview Readiness Note:
+- Why exact symbol lookup complements vector search: Pure vector similarity models (like BGE or Ada) can fail on specific, short,
+  or similarly-spelled identifier strings (e.g. distinguishing `APIRouter` vs `APIRoute` vs `add_api_route`). Exact symbol retrieval guarantees
+  that the exact AST node chunk for the class/function of interest is pulled directly, bypassing embedding retrieval noise.
+"""
+
 import re
 
 from app.services.embeddings import (
@@ -14,6 +34,16 @@ def retrieve_context(
     question: str,
     top_k: int = 3
 ):
+    """
+    Retrieves code chunks using symbol-aware matching or semantic vector search fallback.
+
+    Args:
+        question (str): User's natural language query.
+        top_k (int): Number of chunks to retrieve if falling back to vector search.
+
+    Returns:
+        list of dict: Retrieved code context chunks containing text, file path, symbol name, and score.
+    """
     contexts = []
 
     # -------------------------
@@ -84,4 +114,4 @@ def retrieve_context(
             "score": result.score
         })
 
-    return contexts
+    return contexts

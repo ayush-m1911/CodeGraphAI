@@ -1,3 +1,19 @@
+/**
+ * Purpose:
+ * Connects the workspace to a target repository, rendering URL validation and indexing steps.
+ *
+ * Role in CodeGraphAI:
+ * Handles onboarding of codebases. It captures git paths, checks pattern requirements,
+ * starts the backend index process, and tracks loading states (cloning -> parsing -> embedding -> graph construction).
+ *
+ * Key Responsibilities:
+ * - Collect and validate user-supplied GitHub URLs.
+ * - Restrict validation scopes to python repositories.
+ * - Display interactive progress trackers representing indexing phases.
+ * - Display raw logs from execution steps or error traces upon failure.
+ * - Transition users to the main workspace once ingestion finishes successfully.
+ */
+
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useApp } from '../context/AppContext';

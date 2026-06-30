@@ -1,3 +1,33 @@
+"""
+Purpose:
+Manages interaction with LLMs to generate source-grounded answers.
+
+Role in CodeGraphAI:
+The final stage of the GraphRAG pipeline. It formats retrieved code context chunks (from vectors, symbol lookup,
+and graph paths) and queries the Groq API for responses. It includes a fallback logic that synthesizes a structured,
+metadata-enriched answer locally if the API limit is hit or credentials are not found.
+
+GraphRAG Workflow:
+
+Question
+↓
+Vector Retrieval
+↓
+Symbol Expansion
+↓
+Knowledge Graph
+↓
+LLM
+↓
+Answer
+
+Key Responsibilities:
+* Truncate and compile context chunks safely under maximum token/character limits.
+* Formulate system instructions that require the LLM to output source-grounded references and call flows.
+* Execute completions requests against Groq using Llama 3.3.
+* Provide an automated, structural local summary fallback if the Groq API key is invalid or network issues occur.
+"""
+
 from groq import Groq
 
 from app.config import settings
@@ -9,8 +39,29 @@ client = Groq(
 
 def generate_answer(
     context,
-    question
+    question,
+    intent=None,
+    strategies_used=None
 ):
+    """
+    Generates a developer-targeted answer for the codebase question based on the retrieved contexts.
+
+    Workflow:
+    1. Filter and format context chunks (file paths, symbols, relation details, code snippets) up to character boundaries.
+    2. Construct structured instructions enforcing definitions, files, call flows, and related components list.
+    3. Include intent and strategies_used metadata in the prompt to assist reasoning.
+    4. Make a chat completion call to Groq with llama-3.3-70b-versatile.
+    5. If it fails, compile an AST structural explanation locally based on retrieved context metadata to prevent runtime errors.
+
+    Args:
+        context (list of dict): Code context chunks retrieved by the retrieval phase.
+        question (str): User's question about the repository.
+        intent (str, optional): The detected user intent.
+        strategies_used (list of str, optional): The retrieval strategies executed.
+
+    Returns:
+        str: Grounded response answer in markdown formatting.
+    """
 
     MAX_CONTEXT_CHARS = 7000
 
@@ -52,13 +103,23 @@ CODE:
         context_parts
     )
 
+    intent_metadata_block = ""
+    if intent:
+        intent_metadata_block = f"""
+------------------------------------------------
+
+Retrieval Metadata:
+Intent: {intent}
+Retrieval Strategy: {", ".join(strategies_used or [])}
+"""
+
     prompt = f"""
 You are an expert software architect.
 
 You are analyzing a source code repository.
 
 You must use ONLY the provided repository context.
-
+{intent_metadata_block}
 ------------------------------------------------
 
 Repository Context:
@@ -174,4 +235,4 @@ The query centers on structural elements in the repository. The retrieved codeba
 *(Fallback Response due to Groq API connection limit)*
 The codebase defines `{symbol_name}` as a `{chunk_type}` in file `{file_path}`. Based on exact symbol matches and GraphRAG connections, it is associated with elements across {len(files_list)} file(s). You can explore its relationships and dependencies in the right-side GraphRAG Context Panel or check the source blocks below.
 """
-        return fallback_answer
+        return fallback_answer

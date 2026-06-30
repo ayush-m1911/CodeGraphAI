@@ -1,3 +1,17 @@
+/**
+ * Purpose:
+ * Renders the premium onboarding landing page for CodeGraphAI.
+ *
+ * Role in CodeGraphAI:
+ * Introduces the platform architecture and features using interactive animations.
+ * It provides entry points to either start repository ingestion or inspect the architectural diagram overlay.
+ *
+ * Key Responsibilities:
+ * - Render marketing headings and callouts for the GraphRAG platform.
+ * - Display structured features lists (Ingestion, AST Chunker, Graph, reasoning).
+ * - Trigger navigation routes to repo setup steps or launch the visual Architecture Modal.
+ */
+
 import React from 'react';
 import { motion } from 'framer-motion';
 import { useApp } from '../context/AppContext';

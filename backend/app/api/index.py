@@ -1,3 +1,19 @@
+"""
+Purpose:
+Exposes API endpoints to dynamically ingest, parse, vector-index, and build knowledge graphs for Python repositories.
+
+Role in CodeGraphAI:
+Orchestrates the entire ingest-to-index pipeline of CodeGraphAI. It handles requests from the RepoSetupPage
+to fetch, process, and build indexes for new codebases.
+
+Key Responsibilities:
+* Expose POST /index endpoint accepting repository URLs.
+* Drive the ingestion workflow: Git clone, directory parsing, AST-aware Python chunk extraction.
+* Trigger local embeddings generation and store documents in Qdrant (with safe local-storage fallbacks).
+* Construct call-graphs and containment graphs of symbols to write to graphs/active_graph.json.
+* Return index metrics (number of files, chunks, nodes, edges) to the UI.
+"""
+
 import traceback
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -19,6 +35,23 @@ router = APIRouter()
 
 @router.post("/index")
 def index_repo(payload: RepoRequest):
+    """
+    Ingests and builds a GraphRAG search index for a public GitHub repository.
+
+    Workflow:
+    1. Clone repository from GitHub to repositories/current_repo.
+    2. Traverse files to count docs and extract logical AST Python chunks.
+    3. Generate vector embeddings for chunks and update Qdrant collection database.
+    4. Construct containment and call relationships to form the knowledge graph.
+    5. Save graph database to active_graph.json.
+
+    Args:
+        payload (RepoRequest): Request payload containing the GitHub repo_url.
+
+    Returns:
+        JSONResponse or dict: Summary metrics (success status, repo identifier, counts of docs, chunks, graph nodes/edges),
+        or a structured JSON error response if cloning, DB connection, or parsing fails.
+    """
     try:
         # Extract owner/repo name representation from the URL (e.g. tiangolo/fastapi)
         url_parts = payload.repo_url.rstrip("/").split("/")
@@ -63,7 +96,12 @@ def index_repo(payload: RepoRequest):
         save_graph(graph, graph_name="active_graph.json")
         print("Graph generation completed.")
 
+        # 6. Build and save the structural index
+        from app.services.repository_indexer import build_structural_index
+        build_structural_index(repo_path)
+
         return {
+
             "success": True,
             "repository": repo_identifier,
             "documents": len(docs),

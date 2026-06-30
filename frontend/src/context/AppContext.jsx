@@ -1,3 +1,20 @@
+/**
+ * Purpose:
+ * Global React context provider managing states and asynchronous operations for CodeGraphAI.
+ *
+ * Role in CodeGraphAI:
+ * Serves as the central state hub of the frontend application. It orchestrates user workflows
+ * such as repo indexing progress states, chat message feeds, supporting source card displays,
+ * active knowledge graph rendering data, and global warning/success notifications.
+ *
+ * Key Responsibilities:
+ * - Manage reactive state variables (repoUrl, repoName, indexingState, chatMessages, graphData, active sources).
+ * - Handle step-by-step repository onboarding simulations mapped to the backend indexing lifecycle.
+ * - Call the backend index endpoints (`indexRepository`) and load graphs (`fetchGraph`).
+ * - Send user questions (`sendQuery`) to the `/chat` API.
+ * - Expose clean state reset handlers (`clearChat`, `resetAll`).
+ */
+
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { apiService } from '../services/api';
 
@@ -162,8 +179,12 @@ export const AppProvider = ({ children }) => {
         sender: 'assistant',
         text: chatRes.answer,
         sources: chatRes.sources || [],
+        intent: chatRes.intent,
+        retrieval_strategy: chatRes.retrieval_strategy,
+        confidence: chatRes.confidence,
         timestamp: new Date()
       };
+
 
       setChatMessages((prev) => [...prev, assistantMsg]);
     } catch (error) {

@@ -1,3 +1,19 @@
+/**
+ * Purpose:
+ * Main workspace dashboard for querying the indexed repository and traversing the knowledge graph.
+ *
+ * Role in CodeGraphAI:
+ * Renders the triple-pane developer interface (Black + Gold aesthetic). It links chat inputs,
+ * rendered Markdown responses, code copy elements, referenced source files, and the interactive
+ * GraphRAG relation timeline panel into a unified cockpit.
+ *
+ * Key Responsibilities:
+ * - Render ChatGPT-style chat feed wrapping Markdown rendering and custom code blocks.
+ * - Display interactive source drawers to view retrieved file snippets and scores.
+ * - Render the GraphRAG Context timeline panel displaying calls and containment paths dynamically.
+ * - Provide prompt shortcut configurations and quick access controls (clear chat, new repo onboarding).
+ */
+
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
@@ -362,6 +378,35 @@ export const ChatDashboard = ({ onNavigate }) => {
 
                   {/* Message Bubble */}
                   <div className={`px-4 py-3 rounded-lg border text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-white/3 border-white/5' : 'bg-surface border-white/5 shadow-md'}`}>
+                    {/* Render Intent & Strategy Metadata */}
+                    {msg.sender === 'assistant' && msg.intent && (
+                      <div className="flex flex-wrap items-center gap-2 mb-3 bg-black/30 border border-white/5 px-3 py-1.5 rounded-md text-xs select-none">
+                        <span className="text-[10px] uppercase font-bold text-text-secondary">Intent:</span>
+                        <span className="px-2 py-0.5 bg-primary/10 border border-primary/20 text-primary rounded text-[9px] font-extrabold uppercase tracking-wider">
+                          {msg.intent.replace('_', ' ')}
+                        </span>
+                        
+                        {msg.retrieval_strategy && msg.retrieval_strategy.length > 0 && (
+                          <>
+                            <span className="text-[10px] uppercase font-bold text-text-secondary ml-2">Retrieval:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {msg.retrieval_strategy.map((strat, sIdx) => (
+                                <span key={sIdx} className="px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-[9px] font-semibold text-text-secondary">
+                                  ✓ {strat}
+                                </span>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                        
+                        {msg.confidence && (
+                          <span className="ml-auto text-[9px] font-bold text-emerald-400">
+                            Confidence: {typeof msg.confidence === 'number' ? (msg.confidence * 100).toFixed(0) : msg.confidence}%
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     <ReactMarkdown 
                       components={{
                         pre: ({ node, ...props }) => (

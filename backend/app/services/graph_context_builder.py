@@ -1,3 +1,17 @@
+"""
+Purpose:
+Constructs prompt context from neighboring symbols in the knowledge graph.
+
+Role in CodeGraphAI:
+Translates logical graph node entities retrieved during neighborhood expansion into actual, human-readable source code.
+It maps each neighbor symbol name back to its corresponding source-code chunk definition, building a graph-enriched code context.
+
+Key Responsibilities:
+* Retrieve neighboring nodes and edges for a given symbol name.
+* Look up code chunks from the vector database for each neighbor symbol node.
+* Formulate context records containing symbol names, structural relationships (e.g. calls, contains), target files, chunk types, and raw code text.
+"""
+
 from app.services.graph_retriever import (
     get_neighbors
 )
@@ -11,6 +25,16 @@ def build_graph_context(
     symbol_name: str,
     max_neighbors: int = 10
 ):
+    """
+    Builds context chunks for neighboring nodes connected to a target symbol.
+
+    Args:
+        symbol_name (str): Fully qualified symbol name to expand from.
+        max_neighbors (int): Maximum number of neighbors to query (defaults to 10).
+
+    Returns:
+        list of dict: Graph-expanded source context chunks with relation and source fields.
+    """
 
     neighbors = get_neighbors(
         symbol_name,
@@ -54,4 +78,4 @@ def build_graph_context(
                 }
             )
 
-    return graph_context
+    return graph_context

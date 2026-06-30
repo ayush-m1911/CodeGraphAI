@@ -1,3 +1,24 @@
+"""
+Purpose:
+Manages downloading, cleaning, and validating GitHub repositories dynamically.
+
+Role in CodeGraphAI:
+Implements the repository-fetching stage. It enables dynamic ingestion by accepting a GitHub URL,
+validating it, cloning the code to local filesystems, and preparing it for parsing and indexing.
+
+Key Responsibilities:
+* Validate GitHub URL strings using regular expressions.
+* Clone remote GitHub repositories dynamically using Git CLI subprocess calls.
+* Handle file cleanups and directory replacements safely.
+* Overcome Windows OS read-only permission issues when deleting Git pack files using a chmod hook.
+
+Interview Readiness Note:
+- Windows Permission Bypass: When deleting cloned git repositories programmatically on Windows systems,
+  `shutil.rmtree` typically throws `PermissionError` due to read-only pack files in `.git/objects/pack/`.
+  To ensure smooth dynamic repository swaps on Windows local systems, `clone_repository` passes a custom
+  error handler (`on_rm_error`) that modifies file permissions on-the-fly (`stat.S_IWRITE`) to allow deletion.
+"""
+
 import os
 import re
 import shutil
@@ -7,7 +28,12 @@ import subprocess
 def on_rm_error(func, path, exc_info):
     """
     Error handler for shutil.rmtree to handle read-only file permissions on Windows.
-    This fixes permission errors when deleting Git pack files.
+    This dynamically updates permission flags to make files writeable before retrying deletion.
+
+    Args:
+        func (function): Callback function.
+        path (str): File/dir path where error occurred.
+        exc_info (tuple): Exception information.
     """
     try:
         os.chmod(path, stat.S_IWRITE)
@@ -17,14 +43,26 @@ def on_rm_error(func, path, exc_info):
 
 def validate_github_url(url: str) -> bool:
     """
-    Validates if a URL is a public GitHub repository link.
+    Checks if a URL matches public GitHub repository conventions.
+
+    Args:
+        url (str): Repository URL.
+
+    Returns:
+        bool: True if the pattern matches a public GitHub project link, False otherwise.
     """
     pattern = r"^https?://(www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?$"
     return bool(re.match(pattern, url.strip()))
 
 def clone_repository(repo_url: str) -> str:
     """
-    Clones a GitHub repository dynamically into repositories/current_repo.
+    Clones a GitHub repository dynamically into a target workspace directory.
+
+    Args:
+        repo_url (str): Public GitHub repository URL.
+
+    Returns:
+        str: Directory path where the repository is cloned.
     """
     # 1. Validate the GitHub URL
     if not validate_github_url(repo_url):
