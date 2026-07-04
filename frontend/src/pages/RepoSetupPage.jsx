@@ -25,6 +25,7 @@ export const RepoSetupPage = ({ onNavigate }) => {
     indexRepository,
     indexingState,
     indexingStep,
+    indexingPercent,
     indexingLog,
     indexingSteps,
     repoUrl,
@@ -147,7 +148,7 @@ export const RepoSetupPage = ({ onNavigate }) => {
               <div className="h-1.5 w-full bg-black/60 rounded-full overflow-hidden border border-white/5">
                 <div 
                   className="h-full bg-primary gold-bar-animated transition-all duration-500" 
-                  style={{ width: `${((indexingStep + 1) / indexingSteps.length) * 100}%` }}
+                  style={{ width: `${indexingPercent}%` }}
                 />
               </div>
 

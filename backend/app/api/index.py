@@ -48,20 +48,22 @@ def index_repo(payload: RepoRequest):
 @router.get("/jobs/{job_id}")
 def get_job_status(job_id: str):
     """
-    HTTP GET endpoint to track the status of a repository indexing task.
+    HTTP GET endpoint to track the status and progress of a repository indexing task.
 
-    Inputs:
+    Parameters:
         job_id (str): The unique identifier of the Celery task.
 
-    Outputs:
-        JSONResponse or dict: A dictionary containing the current task status
-        (PENDING, STARTED, SUCCESS, FAILURE). On SUCCESS, includes the service indexing summary.
-        On FAILURE, includes error details.
+    Returns:
+        dict: A dictionary containing the current task status and results/metadata:
+              - status: Current state (PENDING, STARTED, PROGRESS, SUCCESS, FAILURE, RETRY).
+              - progress: If in PROGRESS, contains {"percent": int, "description": str}.
+              - result: If in SUCCESS, contains the indexing metrics.
+              - error: If in FAILURE, contains error details.
 
-    Responsibilities:
-        1. Connect to Redis result backend to query the task by ID.
-        2. Map Celery task state to JSON status fields.
-        3. Return progress or results to the client.
+    Execution Flow:
+        1. Initialize Celery AsyncResult client querying by task ID.
+        2. Query task state from Redis.
+        3. Map state keys and build client response payload.
     """
     result = AsyncResult(job_id, app=celery_app)
     
@@ -72,6 +74,11 @@ def get_job_status(job_id: str):
     if result.state == "SUCCESS":
         response_data["result"] = result.result
     elif result.state == "FAILURE":
+        response_data["error"] = str(result.info)
+    elif result.state == "PROGRESS":
+        response_data["progress"] = result.info
+    elif result.state == "RETRY":
+        # Include retry details in the payload if they are captured
         response_data["error"] = str(result.info)
 
     return response_data

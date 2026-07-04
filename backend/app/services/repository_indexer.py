@@ -112,9 +112,21 @@ def extract_class_inheritance(node, code_bytes: bytes) -> list:
     return inheritance
 
 
-def build_structural_index(repo_path: str) -> dict:
+def build_structural_index(repo_path: str, output_file_path: str = None) -> dict:
     """
     Ingests and parses all Python files to construct the 6 structural indexes.
+
+    Parameters:
+        repo_path (str): The directory path of the repository.
+        output_file_path (str, optional): Custom path to save the index JSON. Defaults to INDEX_FILE_PATH.
+
+    Returns:
+        dict: The constructed structural index dictionary.
+
+    Execution Flow:
+        1. Parse files in repo_path.
+        2. Walk through Python file ASTs and extract symbol details, inheritance, imports, and decorators.
+        3. Save JSON structure to target path (default or custom).
     """
     print("Building structural repository indexes...")
     docs = parse_repository(repo_path)
@@ -221,36 +233,26 @@ def build_structural_index(repo_path: str) -> dict:
                     visibility = "private" if f_name.startswith("_") else "public"
                     docstring = extract_docstring(node, code_bytes)
                     decorators = extract_decorators(node, code_bytes)
-                    params, ret_ann = extract_function_info(node, code_bytes)
+                    parameters, return_annotation = extract_function_info(node, code_bytes)
                     
-                    # Symbol Index
-                    symbol_type = "method" if current_class_fqn else "function"
                     symbol_index[f_fqn] = {
                         "name": f_name,
                         "fqn": f_fqn,
-                        "type": symbol_type,
+                        "type": "method" if current_class_name else "function",
                         "class": current_class_name,
                         "module": module_name,
                         "file": rel_file_path,
                         "line": line_num,
                         "visibility": visibility,
                         "docstring": docstring,
-                        "parameters": params,
-                        "return_annotation": ret_ann,
-                        "decorators": decorators
+                        "decorators": decorators,
+                        "parameters": parameters,
+                        "return_annotation": return_annotation
                     }
                     
-                    # Global Function Index
-                    if not current_class_fqn:
-                        global_functions[f_fqn] = {
-                            "name": f_name,
-                            "file": rel_file_path,
-                            "line": line_num,
-                            "parameters": params,
-                            "return_annotation": ret_ann
-                        }
+                    if not current_class_name:
+                        global_functions[f_fqn] = True
                         
-                    # Decorator Index
                     for dec in decorators:
                         dec_clean = dec.split("(")[0].strip()
                         if dec_clean.startswith("@"):
@@ -259,7 +261,7 @@ def build_structural_index(repo_path: str) -> dict:
                             decorator_index[dec_clean] = []
                         decorator_index[dec_clean].append({
                             "target": f_fqn,
-                            "type": symbol_type,
+                            "type": "method" if current_class_name else "function",
                             "file": rel_file_path,
                             "line": line_num
                         })
@@ -270,12 +272,10 @@ def build_structural_index(repo_path: str) -> dict:
                 
         walk(root)
         
-    # Populate subclasses in Class Hierarchy
-    for child_class, info in class_hierarchy.items():
-        for base in info["base_classes"]:
-            # Find base class FQN
+    # Resolve subclass relationships
+    for child_class, meta in class_hierarchy.items():
+        for base in meta["base_classes"]:
             base_fqn = base
-            # Resolve relative/simple base class names
             for possible_fqn in class_hierarchy:
                 if possible_fqn == base or possible_fqn.endswith(f".{base}"):
                     base_fqn = possible_fqn
@@ -292,20 +292,38 @@ def build_structural_index(repo_path: str) -> dict:
         "global_functions": global_functions
     }
     
-    # Save index
-    os.makedirs(os.path.dirname(INDEX_FILE_PATH), exist_ok=True)
-    with open(INDEX_FILE_PATH, "w", encoding="utf-8") as f:
+    # Save index dynamically
+    target_out_path = output_file_path if output_file_path else INDEX_FILE_PATH
+    os.makedirs(os.path.dirname(target_out_path), exist_ok=True)
+    with open(target_out_path, "w", encoding="utf-8") as f:
         json.dump(index_data, f, indent=4)
         
-    print(f"Structural indexes created. Saved to {INDEX_FILE_PATH}")
+    print(f"Structural indexes created. Saved to {target_out_path}")
     return index_data
 
 
-def load_indexes() -> dict:
+def load_indexes(repo_path: str = None, index_file_path: str = None) -> dict:
     """
     Loads the saved structural index JSON from disk.
+
+    Parameters:
+        repo_path (str, optional): Root folder of the repository.
+        index_file_path (str, optional): Specific absolute path to the index JSON.
+
+    Returns:
+        dict: The loaded index data mapping.
+
+    Execution Flow:
+        1. Resolve target path from parameters, falling back to INDEX_FILE_PATH.
+        2. Read file if exists; return default empty structures otherwise.
     """
-    if not os.path.exists(INDEX_FILE_PATH):
+    target_path = INDEX_FILE_PATH
+    if index_file_path:
+        target_path = index_file_path
+    elif repo_path:
+        target_path = os.path.join(repo_path, "structural_index.json")
+
+    if not os.path.exists(target_path):
         return {
             "symbol_index": {},
             "file_index": [],
@@ -314,5 +332,5 @@ def load_indexes() -> dict:
             "class_hierarchy": {},
             "global_functions": {}
         }
-    with open(INDEX_FILE_PATH, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         return json.load(f)

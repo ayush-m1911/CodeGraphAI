@@ -8,23 +8,24 @@ Responsibilities:
 * Customizes data serialization protocols (JSON) and timezone parameters.
 * Performs task discovery to load asynchronous handlers.
 
-How it communicates with Redis:
-Establishes a connection pool to Redis (defaulting to redis://localhost:6379/0).
-* It writes task payloads to Redis message queues (broker).
-* It reads/writes task states and results from/to Redis storage (backend).
+Interaction with other modules:
+* Reads configuration parameters from `config.py`.
+* Discovers and registers task definitions declared in `app.tasks.*`.
+* Queried by `index.py` endpoints to instantiate `AsyncResult` wrappers.
 
-How it communicates with Celery:
-Acts as the central engine that Celery worker processes boot from. It exposes Celery options
-and registers task routes dynamically.
+How it contributes to the production architecture:
+Provides the central Celery task queue controller. By binding to external Redis instances dynamically 
+through the central configuration parameters, it supports horizontal worker scaling across containers.
 """
 
 from celery import Celery
+from app.config import settings
 
-# Instantiate the Celery app instance
+# Instantiate the Celery app instance using the centralized settings
 celery_app = Celery(
     "codegraphai_workers",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/0"
+    broker=settings.redis_url,
+    backend=settings.redis_url
 )
 
 # Celery Application Configurations

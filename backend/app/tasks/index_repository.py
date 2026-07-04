@@ -4,39 +4,74 @@ Defines Celery background tasks used by CodeGraphAI to process codebases asynchr
 
 Responsibilities:
 * Exposes the index_repository_task wrapper.
-* Invokes the internal Indexing Service without duplicating parsing logic.
-* Relays task completion statuses back to the Celery executor.
+* Handles progress state tracking via Celery's `self.update_state()`.
+* Implements automatic retries with exponential backoff on common failures.
 
-How it communicates with Redis:
-When a task is queued, Celery serializes the arguments and pushes them to Redis.
-Once executed, the worker writes the task execution summary (files/chunks counts)
-back to Redis under the task ID key.
+Interaction with other modules:
+* Triggered by `index.py` POST endpoints.
+* Calls `indexing_service.py` to drive the actual code analysis.
+* Interacts with Redis to store state.
 
-How it communicates with Celery:
-Uses the @celery_app.task decorator to register the function as a Celery-managed task execution unit.
+How it contributes to the production architecture:
+Maintains application resilience. By implementing exponential backoff retries for transient errors
+(e.g., git cloning limits, network timeouts, embedding API failures), it prevents pipeline crashes
+in production environments.
 """
 
+import logging
 from app.workers.celery_app import celery_app
 from app.services.indexing_service import index_repository as service_index_repo
 
+logger = logging.getLogger("codegraphai.tasks")
 
-@celery_app.task(name="app.tasks.index_repository", bind=True)
-def index_repository_task(self, repo_url: str) -> dict:
+
+@celery_app.task(name="app.tasks.index_repository", bind=True, max_retries=3)
+def index_repository_task(self, repo_url: str, repo_id: str = None, repository_path: str = None) -> dict:
     """
     Asynchronously executes the repository indexing pipeline.
 
-    Inputs:
+    Parameters:
         self: The Celery task instance bind context.
         repo_url (str): The public GitHub URL of the repository.
+        repo_id (str, optional): A unique identifier for the repository.
+        repository_path (str, optional): Custom path to clone the repository.
 
-    Outputs:
-        dict: Ingestion metrics summary containing counts of files, chunks, nodes, and edges indexed.
+    Returns:
+        dict: Ingestion metrics summary.
 
-    Responsibilities:
-        * Delegates repository cloning, parsing, indexing, and uploads to the service layer.
-        * Propagates service response values or raises exceptions on failure to Celery worker handlers.
+    Execution Flow:
+        1. Define progress_callback to translate indexing updates into Celery task states.
+        2. Execute service layer indexing coordination.
+        3. Catch failures (e.g. Git clone, network, API limits) and trigger retries with exponential backoff.
     """
-    print(f"Starting async indexing job for: {repo_url}")
-    summary = service_index_repo(repo_url)
-    print(f"Finished async indexing job for: {repo_url}")
-    return summary
+    attempt = self.request.retries + 1
+    logger.info(f"[Indexing] Starting async indexing task for: {repo_url} (Attempt {attempt}/3)")
+    
+    # Progress callback function mapped to Celery update_state
+    def progress_callback(percent: int, description: str):
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "percent": percent,
+                "description": description
+            }
+        )
+        logger.info(f"[Indexing] Progress {percent}%: {description}")
+
+    try:
+        summary = service_index_repo(
+            repo_url=repo_url,
+            repo_id=repo_id,
+            repository_path=repository_path,
+            progress_callback=progress_callback
+        )
+        logger.info(f"[Indexing] Completed indexing task successfully for: {repo_url}")
+        return summary
+    except Exception as exc:
+        # Calculate exponential backoff countdown: 5s, 10s, 20s
+        countdown = (2 ** self.request.retries) * 5
+        logger.error(
+            f"[Indexing] Attempt {attempt} failed for {repo_url}: {exc}. "
+            f"Retrying in {countdown}s..."
+        )
+        raise self.retry(exc=exc, countdown=countdown)

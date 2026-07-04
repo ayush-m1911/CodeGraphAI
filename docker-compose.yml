@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Message broker and Celery backend
+  redis:
+    image: redis:alpine
+    container_name: codegraph_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  # Vector database for codebase search chunks
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: codegraph_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: always
+
+  # Main HTTP API Server (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codegraph_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - COLLECTION_NAME=repo_chunks
+    depends_on:
+      - redis
+      - qdrant
+    # Mount local backend volumes so code graph files are synced
+    volumes:
+      - ./backend/repositories:/app/repositories
+      - ./backend/graphs:/app/graphs
+    restart: always
+
+  # Background tasks processor
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codegraph_celery_worker
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - COLLECTION_NAME=repo_chunks
+    depends_on:
+      - redis
+      - qdrant
+    volumes:
+      - ./backend/repositories:/app/repositories
+      - ./backend/graphs:/app/graphs
+    restart: always
+
+  # Celery monitoring dashboard
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codegraph_flower
+    command: celery -A app.workers.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    restart: always
+
+  # React Frontend (Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: codegraph_frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  qdrant_data:

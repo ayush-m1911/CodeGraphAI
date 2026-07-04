@@ -34,6 +34,7 @@ export const AppProvider = ({ children }) => {
   const [repoName, setRepoName] = useState('');
   const [indexingState, setIndexingState] = useState('idle'); // idle | indexing | success | error
   const [indexingStep, setIndexingStep] = useState(0); // 0 to 5
+  const [indexingPercent, setIndexingPercent] = useState(0);
   const [indexingLog, setIndexingLog] = useState('');
   
   // Chat State
@@ -80,6 +81,7 @@ export const AppProvider = ({ children }) => {
     setRepoUrl(url);
     setIndexingState('indexing');
     setIndexingStep(0);
+    setIndexingPercent(0);
     setIndexingLog('Queuing indexing job...');
     setSelectedSource(null);
     setChatMessages([]);
@@ -91,40 +93,51 @@ export const AppProvider = ({ children }) => {
 
       let jobFinished = false;
       let summary = null;
-      let pollCount = 0;
 
       while (!jobFinished) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        pollCount++;
         
         const jobRes = await apiService.getJobStatus(jobId);
         
         if (jobRes.status === 'PENDING') {
           setIndexingStep(0);
+          setIndexingPercent(5);
           setIndexingLog('Job is queued, waiting for Celery worker...');
-        } else if (jobRes.status === 'STARTED' || jobRes.status === 'RETRY') {
-          // Dynamic visual stepping during active parsing
-          const step = Math.min(1 + Math.floor(pollCount / 3), 4);
-          const logs = [
-            'Cloning repository files into backend filesystem...',
-            'Parsing files using Tree-sitter and mapping symbol signatures...',
-            'Generating vector embeddings using HuggingFace BAAI/bge-small-en-v1.5 model...',
-            'Configuring Qdrant vector database store & building GraphRAG containment relationships...'
-          ];
+        } else if (jobRes.status === 'STARTED') {
+          setIndexingStep(1);
+          setIndexingPercent(10);
+          setIndexingLog('Celery worker started execution...');
+        } else if (jobRes.status === 'RETRY') {
+          setIndexingPercent(5);
+          setIndexingLog(`Task failed, retrying backend execution: ${jobRes.error || 'Transient connection issue'}`);
+        } else if (jobRes.status === 'PROGRESS') {
+          const pct = jobRes.progress?.percent || 0;
+          const desc = jobRes.progress?.description || 'Indexing repository...';
+          
+          setIndexingPercent(pct);
+          setIndexingLog(desc);
+          
+          // Map backend percentages to frontend stepper steps
+          let step = 0;
+          if (pct >= 100) step = 5;
+          else if (pct >= 95) step = 5; // Vector storage complete, graph construction active
+          else if (pct >= 80) step = 4; // Embedding complete, Qdrant store upload active
+          else if (pct >= 60) step = 5; // Knowledge graph construction complete
+          else if (pct >= 40) step = 3; // AST complete, Vector generation active
+          else if (pct >= 25) step = 2; // Parsed complete, AST active
+          else if (pct >= 10) step = 1; // Cloned complete, Parsing active
+          
           setIndexingStep(step);
-          setIndexingLog(logs[step - 1] || 'Analyzing repository files...');
         } else if (jobRes.status === 'SUCCESS') {
           jobFinished = true;
           summary = jobRes.result;
+          setIndexingPercent(100);
+          setIndexingStep(5);
         } else if (jobRes.status === 'FAILURE') {
           jobFinished = true;
           throw new Error(jobRes.error || 'Celery background task execution failed.');
         }
       }
-
-      setIndexingStep(5);
-      setIndexingLog('Constructing repository knowledge graph & call relationships...');
-      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       setRepoName(summary.repository || 'repository');
       setIndexingState('success');
@@ -142,7 +155,6 @@ export const AppProvider = ({ children }) => {
       }
 
     } catch (error) {
-
       console.error(error);
       let errMsg = 'Unable to index repository.';
       if (error.response?.data) {
@@ -229,6 +241,7 @@ export const AppProvider = ({ children }) => {
     setRepoName('');
     setIndexingState('idle');
     setIndexingStep(0);
+    setIndexingPercent(0);
     setIndexingLog('');
     setChatMessages([]);
     setGraphData({ nodes: [], edges: [] });
@@ -243,6 +256,7 @@ export const AppProvider = ({ children }) => {
         repoName,
         indexingState,
         indexingStep,
+        indexingPercent,
         indexingLog,
         indexingSteps,
         chatMessages,
