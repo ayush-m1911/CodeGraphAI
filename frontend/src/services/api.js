@@ -24,19 +24,30 @@ const client = axios.create({
 });
 
 export const apiService = {
-  /**
-   * Indexes a GitHub repository.
-   * @param {string} repoUrl - The github repository URL
-   */
   indexRepository: async (repoUrl) => {
     try {
-      const response = await client.post('/index', { repo_url: repoUrl });
+      const response = await client.post('/repositories/index', { repo_url: repoUrl });
       return response.data;
     } catch (error) {
       console.error('API Index Repository Error:', error);
       throw error.response?.data || error.message || error;
     }
   },
+
+  /**
+   * Tracks background job execution status.
+   * @param {string} jobId - The Celery job ID
+   */
+  getJobStatus: async (jobId) => {
+    try {
+      const response = await client.get(`/jobs/${jobId}`);
+      return response.data;
+    } catch (error) {
+      console.error('API Get Job Status Error:', error);
+      throw error.response?.data || error.message || error;
+    }
+  },
+
 
   /**
    * Sends a user query to chat with the codebase.

@@ -80,39 +80,53 @@ export const AppProvider = ({ children }) => {
     setRepoUrl(url);
     setIndexingState('indexing');
     setIndexingStep(0);
-    setIndexingLog('Validating GitHub URL...');
+    setIndexingLog('Queuing indexing job...');
     setSelectedSource(null);
     setChatMessages([]);
 
     try {
-      // Step 1: Validation
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setIndexingStep(1);
-      setIndexingLog('Cloning repository files into backend filesystem...');
-
-      // Step 2: Ingestion / Clone
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setIndexingStep(2);
-      setIndexingLog('Parsing files using Tree-sitter and mapping symbol signatures...');
-
-      // Step 3: AST Parsing
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setIndexingStep(3);
-      setIndexingLog('Generating vector embeddings using HuggingFace BAAI/bge-small-en-v1.5 model...');
-
-      // Step 4: Vector Generation
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setIndexingStep(4);
-      setIndexingLog('Configuring Qdrant vector database store...');
-
       // Trigger backend index request
-      const res = await apiService.indexRepository(url);
-      
+      const startRes = await apiService.indexRepository(url);
+      const jobId = startRes.job_id;
+
+      let jobFinished = false;
+      let summary = null;
+      let pollCount = 0;
+
+      while (!jobFinished) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        pollCount++;
+        
+        const jobRes = await apiService.getJobStatus(jobId);
+        
+        if (jobRes.status === 'PENDING') {
+          setIndexingStep(0);
+          setIndexingLog('Job is queued, waiting for Celery worker...');
+        } else if (jobRes.status === 'STARTED' || jobRes.status === 'RETRY') {
+          // Dynamic visual stepping during active parsing
+          const step = Math.min(1 + Math.floor(pollCount / 3), 4);
+          const logs = [
+            'Cloning repository files into backend filesystem...',
+            'Parsing files using Tree-sitter and mapping symbol signatures...',
+            'Generating vector embeddings using HuggingFace BAAI/bge-small-en-v1.5 model...',
+            'Configuring Qdrant vector database store & building GraphRAG containment relationships...'
+          ];
+          setIndexingStep(step);
+          setIndexingLog(logs[step - 1] || 'Analyzing repository files...');
+        } else if (jobRes.status === 'SUCCESS') {
+          jobFinished = true;
+          summary = jobRes.result;
+        } else if (jobRes.status === 'FAILURE') {
+          jobFinished = true;
+          throw new Error(jobRes.error || 'Celery background task execution failed.');
+        }
+      }
+
       setIndexingStep(5);
       setIndexingLog('Constructing repository knowledge graph & call relationships...');
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      setRepoName(res.repository || res.repo_name || 'repository');
+      setRepoName(summary.repository || 'repository');
       setIndexingState('success');
       setIndexingLog('Repository successfully indexed and ready for chat reasoning.');
       triggerToast('Repository indexed successfully.', 'success');
@@ -128,6 +142,7 @@ export const AppProvider = ({ children }) => {
       }
 
     } catch (error) {
+
       console.error(error);
       let errMsg = 'Unable to index repository.';
       if (error.response?.data) {
