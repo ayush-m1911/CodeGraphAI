@@ -1,22 +1,23 @@
 """
 Purpose:
-Constructs a semantic knowledge graph mapping structural and call dependencies in Python codebases.
+Constructs a semantic and hierarchical knowledge graph mapping codebase containment trees and call dependencies.
 
 Responsibilities:
-* Collect global symbols and imports maps across all codebase files.
-* Extract structural relationships (contains, defines, inherits, decorates, imports).
-* Resolve semantic call, return, raising, and dataflow connections.
-* Validate edge connections, creating boundary external symbol nodes where required.
+* Collect global symbols, docstrings, signatures, and imports maps.
+* Extract structural containment, inheritance, decorator, and call relationships.
+* Construct the parent-child package/module nesting tree structure.
+* Validate edges and create external boundary symbol nodes.
 * Serialize nodes and edges using strongly typed models (GraphNode, GraphEdge, GraphMetadata).
 
 Inputs:
 * Python repository root filesystem path.
 
 Outputs:
-* Serialized knowledge graph dictionary containing lists of nodes and edges matching schema.
+* Serialized knowledge graph dictionary containing nested nodes and relation edges.
 
 Interaction with other modules:
-* Reads code files via `parser.py`, uses tree-sitter bindings from `code_chunker.py`, imports semantic resolutions from `call_graph.py`, and is orchestrated by the `indexing_service.py` ingestion loop.
+* Parses repositories via `parser.py`, drives tree-sitter structures via `code_chunker.py`,
+  references caller-callee scopes via `call_graph.py`, and outputs metrics to `indexing_service.py`.
 """
 
 import os
@@ -25,6 +26,7 @@ import json
 from app.services.parser import parse_repository
 from app.services.code_chunker import parser
 from app.models.graph import GraphNode, GraphEdge, GraphMetadata
+from typing import Optional
 
 
 def get_module_name(file_path: str, repo_path: str) -> str:
@@ -177,6 +179,51 @@ def extract_file_imports(root_node, current_module: str, code_bytes: bytes) -> d
     return imports
 
 
+def get_docstring(node, code_bytes: bytes) -> Optional[str]:
+    """
+    Helper to extract docstring blocks directly from function/class bodies in the AST.
+    """
+    body_node = node.child_by_field_name("body")
+    if body_node and body_node.children:
+        first_stmt = body_node.children[0]
+        if first_stmt.type == "expression_statement":
+            string_nodes = [c for c in first_stmt.children if c.type == "string"]
+            if string_nodes:
+                string_node = string_nodes[0]
+                text = code_bytes[string_node.start_byte:string_node.end_byte].decode("utf-8", errors="ignore").strip()
+                if text.startswith('"""') or text.startswith("'''"):
+                    return text[3:-3].strip()
+                elif text.startswith('"') or text.startswith("'"):
+                    return text[1:-1].strip()
+    return None
+
+
+def get_signature(node, symbol_type: str, name: str, code_bytes: bytes) -> Optional[str]:
+    """
+    Helper to extract syntax signatures for classes, functions, and methods.
+    """
+    if symbol_type == "class":
+        sig = f"class {name}"
+        arg_list = node.child_by_field_name("superclasses")
+        if not arg_list:
+            for child in node.children:
+                if child.type == "argument_list":
+                    arg_list = child
+                    break
+        if arg_list:
+            params = code_bytes[arg_list.start_byte:arg_list.end_byte].decode("utf-8", errors="ignore").strip()
+            sig = f"class {name}{params}"
+        return sig
+    elif symbol_type in ("function", "method"):
+        sig = f"def {name}()"
+        params_node = node.child_by_field_name("parameters")
+        if params_node:
+            params = code_bytes[params_node.start_byte:params_node.end_byte].decode("utf-8", errors="ignore").strip()
+            sig = f"def {name}{params}"
+        return sig
+    return None
+
+
 def collect_symbols(repo_path: str, docs: list) -> tuple:
     """
     Stage 1: Traverses AST of all Python files in the repository to collect
@@ -198,7 +245,8 @@ def collect_symbols(repo_path: str, docs: list) -> tuple:
         if not doc["file_path"].endswith(".py"):
             continue
             
-        file_path = doc["file_path"]
+        # Normalize all path strings
+        file_path = doc["file_path"].replace("\\", "/")
         code = doc["content"]
         code_bytes = bytes(code, "utf8")
         
@@ -237,7 +285,10 @@ def collect_symbols(repo_path: str, docs: list) -> tuple:
                         "file": file_path,
                         "parent_class": class_fqn,
                         "inherits": inherits,
-                        "line": node.start_point[0] + 1
+                        "line": node.start_point[0] + 1,
+                        "end_line": node.end_point[0] + 1,
+                        "docstring": get_docstring(node, code_bytes),
+                        "signature": get_signature(node, "class", c_name, code_bytes)
                     }
                     
                     for child in node.children:
@@ -261,7 +312,10 @@ def collect_symbols(repo_path: str, docs: list) -> tuple:
                         "file": file_path,
                         "parent_class": class_fqn,
                         "inherits": [],
-                        "line": node.start_point[0] + 1
+                        "line": node.start_point[0] + 1,
+                        "end_line": node.end_point[0] + 1,
+                        "docstring": get_docstring(node, code_bytes),
+                        "signature": get_signature(node, symbol_type, f_name, code_bytes)
                     }
                     return
                     
@@ -322,18 +376,37 @@ def extract_relationships(
         if not doc["file_path"].endswith(".py"):
             continue
             
-        file_path = doc["file_path"]
+        file_path = doc["file_path"].replace("\\", "/")
         code = doc["content"]
         code_bytes = bytes(code, "utf8")
         module_name = file_modules[file_path]
         imports = file_imports[file_path]
 
-        # 1. Register File Node
+        tree = parser.parse(code_bytes)
+        root = tree.root_node
+
+        # 1. Register File Node (Module)
         if file_path not in seen_nodes:
+            file_name = os.path.basename(file_path)
+            file_doc = None
+            if root.children and root.children[0].type == "expression_statement":
+                string_nodes = [c for c in root.children[0].children if c.type == "string"]
+                if string_nodes:
+                    string_node = string_nodes[0]
+                    text = code_bytes[string_node.start_byte:string_node.end_byte].decode("utf-8", errors="ignore").strip()
+                    if text.startswith('"""') or text.startswith("'''"):
+                        file_doc = text[3:-3].strip()
+
             nodes.append(GraphNode(
                 id=file_path,
                 type="file",
-                file_path=file_path
+                symbol_name=file_name,
+                qualified_name=file_path,
+                file_path=file_path,
+                node_type="file",
+                docstring=file_doc,
+                start_line=1,
+                end_line=len(code.split("\n"))
             ))
             seen_nodes.add(file_path)
 
@@ -349,9 +422,6 @@ def extract_relationships(
                     resolved=True
                 ))
 
-        tree = parser.parse(code_bytes)
-        root = tree.root_node
-
         def get_text(node):
             return code_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="ignore").strip()
 
@@ -362,13 +432,20 @@ def extract_relationships(
                 if name_node:
                     c_name = get_text(name_node)
                     class_fqn = f"{module_name}.{c_name}"
+                    meta = symbol_table.get(class_fqn, {})
                     
                     if class_fqn not in seen_nodes:
                         nodes.append(GraphNode(
                             id=class_fqn,
                             type="class",
+                            symbol_name=c_name,
+                            qualified_name=class_fqn,
                             file_path=file_path,
-                            line=node.start_point[0] + 1
+                            node_type="class",
+                            docstring=meta.get("docstring"),
+                            signature=meta.get("signature"),
+                            start_line=meta.get("line"),
+                            end_line=meta.get("end_line")
                         ))
                         seen_nodes.add(class_fqn)
                         
@@ -455,13 +532,20 @@ def extract_relationships(
                     else:
                         func_fqn = f"{module_name}.{f_name}"
                         func_type = "function"
+                    meta = symbol_table.get(func_fqn, {})
                         
                     if func_fqn not in seen_nodes:
                         nodes.append(GraphNode(
                             id=func_fqn,
                             type=func_type,
+                            symbol_name=f_name,
+                            qualified_name=func_fqn,
                             file_path=file_path,
-                            line=node.start_point[0] + 1
+                            node_type=func_type,
+                            docstring=meta.get("docstring"),
+                            signature=meta.get("signature"),
+                            start_line=meta.get("line"),
+                            end_line=meta.get("end_line")
                         ))
                         seen_nodes.add(func_fqn)
                         
@@ -533,19 +617,168 @@ def extract_relationships(
                 resolved=rel.get("resolved", True)
             ))
 
-        # 4. Register variables as symbols in the nodes list
+        # 4. Register variables as symbols in the nodes list and link them to container
         for fqn, meta in symbol_table.items():
             if meta["type"] == "variable" and meta["file"] == file_path:
                 if fqn not in seen_nodes:
                     nodes.append(GraphNode(
                         id=fqn,
                         type="variable",
+                        symbol_name=meta["name"],
+                        qualified_name=fqn,
                         file_path=file_path,
-                        line=meta.get("line")
+                        node_type="variable",
+                        start_line=meta.get("line"),
+                        end_line=meta.get("line")
                     ))
                     seen_nodes.add(fqn)
+                # Link variables using contains and defines relations
+                edges.append(GraphEdge(
+                    source=file_path,
+                    target=fqn,
+                    relation="contains",
+                    source_file=file_path
+                ))
+                edges.append(GraphEdge(
+                    source=file_path,
+                    target=fqn,
+                    relation="defines",
+                    source_file=file_path
+                ))
 
     return nodes, edges
+
+
+def build_hierarchy(nodes: list, edges: list, repo_path: str) -> list:
+    """
+    Constructs the parent-child nesting tree from contains relations and file directories.
+    Generates Repository and Package nodes dynamically, and computes hierarchy_depth.
+    
+    Inputs:
+        nodes (list of GraphNode): Unified structural symbol nodes list.
+        edges (list of GraphEdge): Semantic connections list.
+        repo_path (str): Folder path of repository root.
+
+    Outputs:
+        list of GraphNode: Unified list filled with parent-child linkage contexts.
+    """
+    repo_normalized = repo_path.replace("\\", "/").rstrip("/")
+    repo_name = repo_normalized.split("/")[-1]
+    
+    # Locate Repository node or create it
+    repo_node = None
+    for n in nodes:
+        if n.id == repo_normalized or n.qualified_name == repo_normalized:
+            repo_node = n
+            break
+            
+    if not repo_node:
+        repo_node = GraphNode(
+            id=repo_normalized,
+            type="repository",
+            symbol_name=repo_name,
+            qualified_name=repo_normalized,
+            file_path=repo_normalized,
+            node_type="repository",
+            docstring="Root repository hierarchy node."
+        )
+        nodes.append(repo_node)
+
+    # Dictionary lookup of all current nodes
+    nodes_dict = {n.id: n for n in nodes}
+    
+    # 1. Establish parent-child references using structural containment edges
+    for edge in edges:
+        if edge.relation in ("contains", "defines"):
+            parent_node = nodes_dict.get(edge.source)
+            child_node = nodes_dict.get(edge.target)
+            if parent_node and child_node:
+                child_node.parent = parent_node.id
+                if child_node.id not in parent_node.children:
+                    parent_node.children.append(child_node.id)
+
+    # 2. Walk up file directory paths to create Package nodes recursively
+    file_nodes = [n for n in nodes if n.node_type == "file"]
+    for n in file_nodes:
+        child_id = n.id
+        curr_dir = os.path.dirname(child_id).replace("\\", "/")
+        
+        while True:
+            if not curr_dir or curr_dir == "." or curr_dir == repo_normalized or len(curr_dir) < len(repo_normalized):
+                n_root = nodes_dict.get(repo_normalized)
+                n_child = nodes_dict.get(child_id)
+                if n_root and n_child:
+                    n_child.parent = n_root.id
+                    if n_child.id not in n_root.children:
+                        n_root.children.append(n_child.id)
+                break
+            else:
+                pkg_node = nodes_dict.get(curr_dir)
+                if not pkg_node:
+                    pkg_name = curr_dir.split("/")[-1]
+                    pkg_node = GraphNode(
+                        id=curr_dir,
+                        type="package",
+                        symbol_name=pkg_name,
+                        qualified_name=curr_dir,
+                        file_path=curr_dir,
+                        node_type="package",
+                        parent=None,
+                        children=[],
+                        docstring="Directory package node."
+                    )
+                    nodes.append(pkg_node)
+                    nodes_dict[curr_dir] = pkg_node
+                    
+                n_child = nodes_dict.get(child_id)
+                if n_child:
+                    n_child.parent = pkg_node.id
+                    if n_child.id not in pkg_node.children:
+                        pkg_node.children.append(n_child.id)
+                        
+                child_id = curr_dir
+                curr_dir = os.path.dirname(curr_dir).replace("\\", "/")
+
+    # 3. Calculate package paths for all nodes
+    for n in nodes:
+        if n.node_type == "repository":
+            n.package = None
+            n.module = None
+        elif n.node_type == "package":
+            n.package = os.path.dirname(n.id).replace("\\", "/")
+            n.module = None
+        elif n.node_type == "file":
+            n.package = os.path.dirname(n.id).replace("\\", "/")
+            n.module = n.symbol_name[:-3] if n.symbol_name.endswith(".py") else n.symbol_name
+        else:
+            n.package = os.path.dirname(n.file_path).replace("\\", "/")
+            parts = n.id.split(".")
+            n.module = parts[0] if parts else None
+
+    # 4. Resolve depth levels recursively
+    memo_depth = {}
+    def calculate_depth(node_id, visited=None):
+        if visited is None:
+            visited = set()
+        if node_id in memo_depth:
+            return memo_depth[node_id]
+        if node_id in visited:
+            return 0
+            
+        visited.add(node_id)
+        node = nodes_dict.get(node_id)
+        if not node or not node.parent:
+            memo_depth[node_id] = 0
+            return 0
+            
+        d = 1 + calculate_depth(node.parent, visited)
+        memo_depth[node_id] = d
+        return d
+
+    for n in nodes:
+        n.hierarchy_depth = calculate_depth(n.id)
+
+    return nodes
 
 
 def validate_edges(edges: list, nodes_set: set) -> tuple:
@@ -565,16 +798,20 @@ def validate_edges(edges: list, nodes_set: set) -> tuple:
     seen_additional = set()
 
     for edge in edges:
-        # Prevent duplicates
+        # Prevent self loops
         if edge.source == edge.target:
             continue
             
         # Source boundary check
         if edge.source not in nodes_set and edge.source not in seen_additional:
+            name_part = edge.source.split(".")[-1]
             additional_nodes.append(GraphNode(
                 id=edge.source,
                 type="module" if "." in edge.source else "class",
+                symbol_name=name_part,
+                qualified_name=edge.source,
                 file_path=edge.source_file,
+                node_type="module" if "." in edge.source else "class",
                 docstring="External package or dependency boundary symbol."
             ))
             seen_additional.add(edge.source)
@@ -582,10 +819,14 @@ def validate_edges(edges: list, nodes_set: set) -> tuple:
         # Target boundary check
         if edge.target not in nodes_set and edge.target not in seen_additional:
             dest_file = edge.destination_file if edge.destination_file else "external"
+            name_part = edge.target.split(".")[-1]
             additional_nodes.append(GraphNode(
                 id=edge.target,
                 type="module" if "." in edge.target else "class",
+                symbol_name=name_part,
+                qualified_name=edge.target,
                 file_path=dest_file,
+                node_type="module" if "." in edge.target else "class",
                 docstring="External package or dependency boundary symbol."
             ))
             seen_additional.add(edge.target)
@@ -641,11 +882,13 @@ def build_repository_graph(repo_path: str) -> dict:
     Outputs:
         dict: Standardized knowledge graph containing nodes list and edges list.
     """
-    print(f"Ingesting repository from: {repo_path}")
-    docs = parse_repository(repo_path)
+    # Normalize repo root path
+    repo_path_normalized = repo_path.replace("\\", "/")
+    print(f"Ingesting repository from: {repo_path_normalized}")
+    docs = parse_repository(repo_path_normalized)
     
     # 1. Collect Symbols
-    symbol_table, file_imports, file_modules = collect_symbols(repo_path, docs)
+    symbol_table, file_imports, file_modules = collect_symbols(repo_path_normalized, docs)
     print(f"Stage 1 Complete: Collected {len(symbol_table)} symbols.")
     
     # 2. Extract Relationships
@@ -658,8 +901,12 @@ def build_repository_graph(repo_path: str) -> dict:
     nodes.extend(boundary_nodes)
     print(f"Stage 3 Complete: Validated edges, added {len(boundary_nodes)} external node fallbacks.")
     
+    # 3.5. Build Hierarchy tree
+    nodes = build_hierarchy(nodes, validated_edges, repo_path_normalized)
+    print("Stage 3.5 Complete: Repository hierarchy built recursively.")
+    
     # 4. Assemble Graph
-    url_parts = repo_path.replace(os.sep, '/').rstrip("/").split("/")
+    url_parts = repo_path_normalized.rstrip("/").split("/")
     repo_identifier = "/".join(url_parts[-2:]) if len(url_parts) >= 2 else "repository"
     
     metadata = GraphMetadata(

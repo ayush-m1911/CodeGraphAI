@@ -1,27 +1,41 @@
 """
 Purpose:
-Defines strongly typed models for the repository knowledge graph schema.
+Defines strongly typed models for the hierarchical and semantic repository knowledge graph schema.
 
 Responsibilities:
-* GraphNode: Represents a node in the code intelligence graph.
+* GraphNode: Represents a node in the code intelligence graph with full hierarchical metadata.
 * GraphEdge: Represents a semantic relationship link between nodes.
 * GraphMetadata: Captures indexing metadata metrics of the constructed graph.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
 
 class GraphNode(BaseModel):
     """
-    Strongly typed model representing a code entity node.
+    Strongly typed model representing a code entity node with hierarchical parameters.
     """
-    id: str = Field(..., description="Unique identifier for the node, typically FQN or file path.")
-    type: str = Field(..., description="Type of node: file, class, method, function, module, variable.")
-    file_path: str = Field(..., description="Relative filesystem path where this node is located.")
-    line: Optional[int] = Field(None, description="Start line number of the definition in the file.")
+    # Backward compatible fields
+    id: str = Field(..., description="Unique identifier for the node (FQN or path).")
+    type: str = Field(..., description="Type of node: file, class, method, function, module, variable, package, repository.")
+    line: Optional[int] = Field(None, description="Legacy start line helper.")
     visibility: Optional[str] = Field(None, description="Visibility of the symbol: public or private.")
+
+    # Enriched hierarchical metadata fields
+    symbol_name: str = Field(..., description="Simple name of the symbol.")
+    qualified_name: str = Field(..., description="Fully qualified name of the symbol.")
+    package: Optional[str] = Field(None, description="Package or folder containing this symbol.")
+    module: Optional[str] = Field(None, description="Dotted module name containing this symbol.")
+    file_path: str = Field(..., description="Relative filesystem path where this node is located.")
+    node_type: str = Field(..., description="Hierarchical node type.")
+    parent: Optional[str] = Field(None, description="FQN or ID of the parent node.")
+    children: List[str] = Field(default_factory=list, description="List of child node FQNs or IDs.")
+    signature: Optional[str] = Field(None, description="Function parameter layout or class superclass listing.")
     docstring: Optional[str] = Field(None, description="Docstring extracted from the symbol block.")
+    start_line: Optional[int] = Field(None, description="Start line number of the definition.")
+    end_line: Optional[int] = Field(None, description="End line number of the definition.")
+    hierarchy_depth: int = Field(0, description="Nesting level inside the repository tree hierarchy.")
 
 
 class GraphEdge(BaseModel):
