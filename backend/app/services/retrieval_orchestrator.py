@@ -126,17 +126,19 @@ def traverse_graph(
     graph: dict,
     max_depth: int = 2,
     allowed_relations: List[str] = None
-) -> Tuple[List[dict], List[dict]]:
+) -> Tuple[List[dict], List[dict], Dict[str, int]]:
     """
     Stage 4: Performs relation-aware depth-limited traversal starting from resolved symbols,
-    safely preventing cycles and duplicate node accumulation.
+    safely preventing cycles and duplicate node accumulation. Returns node mappings and distance levels.
     """
     retrieved_edges = []
     visited = set()
+    graph_distances = {}
     
     queue = [(sym, 0) for sym in start_symbols]
     for sym in start_symbols:
         visited.add(sym)
+        graph_distances[sym] = 0
         
     while queue:
         curr, depth = queue.pop(0)
@@ -153,6 +155,7 @@ def traverse_graph(
                 retrieved_edges.append(edge)
                 if target not in visited:
                     visited.add(target)
+                    graph_distances[target] = depth + 1
                     queue.append((target, depth + 1))
                     
             # Traverse incoming
@@ -161,6 +164,7 @@ def traverse_graph(
                 retrieved_edges.append(edge)
                 if source not in visited:
                     visited.add(source)
+                    graph_distances[source] = depth + 1
                     queue.append((source, depth + 1))
                     
     retrieved_nodes = []
@@ -168,7 +172,7 @@ def traverse_graph(
         if node["id"] in visited:
             retrieved_nodes.append(node)
             
-    return retrieved_nodes, retrieved_edges
+    return retrieved_nodes, retrieved_edges, graph_distances
 
 
 class RetrievalOrchestrator:
@@ -176,50 +180,6 @@ class RetrievalOrchestrator:
     Staged query context coordinator implementing intent routing and graph expansions.
     """
     
-    def score_chunk(self, chunk: dict, question: str, intent: str) -> float:
-        """
-        Stage 8: Ranks chunk blocks according to relevance scores aligned to query intent.
-        """
-        score = 0.0
-        
-        # Base vector or graph score
-        if isinstance(chunk.get("score"), (int, float)):
-            score += chunk["score"]
-        elif chunk.get("score") == "graph":
-            score += 0.6
-        else:
-            score += 0.5
-            
-        # Target matching term
-        symbol_name = chunk.get("symbol_name")
-        if symbol_name:
-            if symbol_name.lower() in question.lower() or symbol_name.split(".")[-1].lower() in question.lower():
-                score += 0.5
-                
-        # Intent specific scoring
-        relation = chunk.get("relation")
-        chunk_type = chunk.get("chunk_type")
-        
-        if intent == "Call Flow" and relation in ("calls", "instantiates", "returns"):
-            score += 0.4
-        elif intent == "Architecture":
-            if relation in ("contains", "defines", "inherits", "imports"):
-                score += 0.4
-            if chunk_type in ("class", "file"):
-                score += 0.2
-        elif intent == "Dependencies":
-            if relation in ("imports", "inherits") or (relation and "reverse" in relation):
-                score += 0.4
-        elif intent == "Error Analysis":
-            if relation == "raises" or (symbol_name and "error" in symbol_name.lower()):
-                score += 0.4
-        elif intent == "Configuration":
-            file_path = chunk.get("file_path", "").lower()
-            if "config" in file_path or "setup" in file_path or "docker" in file_path:
-                score += 0.4
-                
-        return score
-
     def orchestrate(self, question: str, max_context_size: int = 12) -> Tuple[List[dict], str, List[str], float]:
         """
         Coordinates the staged pipeline stages:
@@ -259,7 +219,7 @@ class RetrievalOrchestrator:
         elif intent == "Error Analysis":
             allowed_relations = ["raises", "calls", "references"]
 
-        traversed_nodes, traversed_edges = traverse_graph(
+        traversed_nodes, traversed_edges, graph_distances = traverse_graph(
             resolved_symbols, graph, max_depth=2, allowed_relations=allowed_relations
         )
         
@@ -274,6 +234,10 @@ class RetrievalOrchestrator:
                 if symbol_results:
                     chunk = dict(symbol_results[0])
                     chunk["score"] = "graph"
+                    # Attach node hierarchy properties to chunk for scoring
+                    chunk["hierarchy_depth"] = node.get("hierarchy_depth", 3)
+                    chunk["node_type"] = node.get("node_type")
+                    
                     # Attach relation context
                     for edge in traversed_edges:
                         if edge["target"] == node["id"]:
@@ -291,21 +255,28 @@ class RetrievalOrchestrator:
         merged_chunks.extend(vector_chunks)
         merged_chunks.extend(graph_chunks)
 
-        # 7. Deduplication
+        # 7. Deduplication & Score Calculation
+        from app.services.ranking_engine import ScoringEngine, merge_overlapping_chunks
+        scoring_engine = ScoringEngine()
+        metadata = {"graph_distances": graph_distances}
+        
         deduped_chunks = []
         seen = set()
         for chunk in merged_chunks:
+            chunk["ranking_score"] = scoring_engine.compute_composite_score(chunk, question, intent, metadata)
+            
             key = (chunk.get("file_path"), chunk.get("symbol_name"), chunk.get("relation"))
             if key not in seen:
                 seen.add(key)
                 deduped_chunks.append(chunk)
 
-        # 8. Ranking
-        for chunk in deduped_chunks:
-            chunk["ranking_score"] = self.score_chunk(chunk, question, intent)
-            
-        deduped_chunks.sort(key=lambda x: x["ranking_score"], reverse=True)
-        final_context = deduped_chunks[:max_context_size]
+        # 8. Merge Overlapping Chunks
+        merged_contexts = merge_overlapping_chunks(deduped_chunks)
+        strategies_used.append("Context Merging")
+
+        # 9. Sort by ranking score
+        merged_contexts.sort(key=lambda x: x.get("ranking_score", 0.0), reverse=True)
+        final_context = merged_contexts[:max_context_size]
         
         # Confidence calculation
         confidence = 0.95 if resolved_symbols else 0.70
@@ -318,3 +289,4 @@ class RetrievalOrchestrator:
         print(f"  Merged size: {len(deduped_chunks)} -> Final context: {len(final_context)} chunks")
         
         return final_context, intent, strategies_used, confidence
+
