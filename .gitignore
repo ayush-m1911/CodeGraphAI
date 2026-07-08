@@ -28,6 +28,7 @@ backend/repositories/
 qdrant_storage/
 
 # Logs
+
 *.log
 
 # OS files

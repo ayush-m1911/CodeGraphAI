@@ -1,18 +1,22 @@
 """
 Purpose:
-Extracts semantic function calls, instantiations, and return relationships from Python source code ASTs.
+Extracts semantic function calls, instantiations, exception raising, dataflow variables, and return relationships from Python source code ASTs.
 
-Role in CodeGraphAI:
-Builds the enriched caller-callee relationship dataset. It uses a repository-wide symbol table and
-local file imports to resolve raw names (like `self.method` or `Depends`) to fully qualified symbols,
-enabling precise GraphRAG queries.
-
-Key Responsibilities:
+Responsibilities:
 * Parse function and method bodies recursively.
 * Track local variable types (e.g. `obj = MyClass()`) for resolving method calls.
 * Resolve `self.method(...)` and `cls.method(...)` by traversing the class inheritance chain.
 * Resolve imported symbols to their fully qualified package names.
-* Extract relationship types: `calls`, `instantiates`, and `returns` with confidence metrics.
+* Extract relationship types: `calls`, `instantiates`, `returns`, `raises`, `reads_variable`, `writes_variable`, `uses_global`, and `references` with confidence metrics.
+
+Inputs:
+* Python source code code-bytes, local file imports dictionary, and repository symbol table mappings.
+
+Outputs:
+* Extracted semantic relationship lists with resolved FQNs and verification tags.
+
+Interaction with other modules:
+* Works closely with `code_graph.py` to supply callers-callees lists when compiling repository-level graphs.
 """
 
 import re
@@ -205,6 +209,17 @@ def extract_semantic_relations(
         # --------------------
         # ASSIGNMENT (TYPE PROPAGATION)
         # --------------------
+        def find_all_identifiers(subnode):
+            idents = []
+            if subnode.type == "identifier":
+                idents.append(subnode)
+            for child in subnode.children:
+                idents.extend(find_all_identifiers(child))
+            return idents
+
+        # --------------------
+        # ASSIGNMENT (TYPE PROPAGATION AND DATAFLOW)
+        # --------------------
         if node.type == "assignment" and current_function_fqn:
             left_node = None
             right_node = None
@@ -225,6 +240,68 @@ def extract_semantic_relations(
                         meta = symbol_table.get(res_fqn)
                         if meta and meta.get("type") == "class":
                             local_vars[var_name] = res_fqn
+
+            # Extract reads_variable, writes_variable, and uses_global relations
+            equal_idx = -1
+            for idx, c in enumerate(node.children):
+                if c.type == "=":
+                    equal_idx = idx
+                    break
+            if equal_idx != -1:
+                left_side = node.children[:equal_idx]
+                right_side = node.children[equal_idx+1:]
+                
+                # Written variables (writes_variable)
+                for part in left_side:
+                    for ident_node in find_all_identifiers(part):
+                        var_name = get_text(ident_node)
+                        res_fqn = f"{module_name}.{var_name}"
+                        if res_fqn in symbol_table and symbol_table[res_fqn]["type"] == "variable":
+                            relations.append({
+                                "source": current_function_fqn,
+                                "target": res_fqn,
+                                "relation": "writes_variable",
+                                "resolved": True,
+                                "confidence": "high",
+                                "file_path": file_path,
+                                "line": ident_node.start_point[0] + 1
+                            })
+                            relations.append({
+                                "source": current_function_fqn,
+                                "target": res_fqn,
+                                "relation": "uses_global",
+                                "resolved": True,
+                                "confidence": "high",
+                                "file_path": file_path,
+                                "line": ident_node.start_point[0] + 1
+                            })
+                            
+                # Read variables (reads_variable)
+                for part in right_side:
+                    for ident_node in find_all_identifiers(part):
+                        var_name = get_text(ident_node)
+                        res_fqn, res_status, confidence = resolve_name(
+                            var_name, current_class_fqn, local_imports, symbol_table, local_vars, module_name
+                        )
+                        if res_status and symbol_table[res_fqn]["type"] == "variable":
+                            relations.append({
+                                "source": current_function_fqn,
+                                "target": res_fqn,
+                                "relation": "reads_variable",
+                                "resolved": True,
+                                "confidence": confidence,
+                                "file_path": file_path,
+                                "line": ident_node.start_point[0] + 1
+                            })
+                            relations.append({
+                                "source": current_function_fqn,
+                                "target": res_fqn,
+                                "relation": "uses_global",
+                                "resolved": True,
+                                "confidence": confidence,
+                                "file_path": file_path,
+                                "line": ident_node.start_point[0] + 1
+                            })
 
         # --------------------
         # FUNCTION CALL
@@ -253,14 +330,14 @@ def extract_semantic_relations(
                     "relation": relation,
                     "resolved": res_status,
                     "confidence": confidence,
-                    "file_path": file_path
+                    "file_path": file_path,
+                    "line": node.start_point[0] + 1
                 })
 
         # --------------------
         # RETURN STATEMENT
         # --------------------
         if node.type == "return_statement" and current_function_fqn:
-            # Find the return expression node
             ret_val_node = None
             for child in node.children:
                 if child.type not in ("return", " "):
@@ -268,7 +345,6 @@ def extract_semantic_relations(
                     break
             if ret_val_node:
                 val_text = get_text(ret_val_node)
-                # If it's a call, resolve the callable
                 if ret_val_node.type == "call":
                     callable_node = ret_val_node.child_by_field_name("function")
                     if callable_node:
@@ -284,14 +360,99 @@ def extract_semantic_relations(
                         "relation": "returns",
                         "resolved": True,
                         "confidence": confidence,
-                        "file_path": file_path
+                        "file_path": file_path,
+                        "line": node.start_point[0] + 1
                     })
+
+        # --------------------
+        # RAISES STATEMENT
+        # --------------------
+        if node.type == "raise_statement" and current_function_fqn:
+            raised_expr = None
+            for child in node.children:
+                if child.type not in ("raise", " "):
+                    raised_expr = child
+                    break
+            if raised_expr:
+                expr_text = get_text(raised_expr)
+                if raised_expr.type == "call":
+                    func_node = raised_expr.child_by_field_name("function")
+                    if func_node:
+                        expr_text = get_text(func_node)
+                        
+                res_fqn, res_status, confidence = resolve_name(
+                    expr_text, current_class_fqn, local_imports, symbol_table, local_vars, module_name
+                )
+                relations.append({
+                    "source": current_function_fqn,
+                    "target": res_fqn,
+                    "relation": "raises",
+                    "resolved": res_status,
+                    "confidence": confidence,
+                    "file_path": file_path,
+                    "line": node.start_point[0] + 1
+                })
+
+        # --------------------
+        # REFERENCES & VARIABLES
+        # --------------------
+        if node.type == "identifier" and (current_function_fqn or current_class_fqn):
+            name_text = get_text(node)
+            if len(name_text) > 2:
+                res_fqn, res_status, confidence = resolve_name(
+                    name_text, current_class_fqn, local_imports, symbol_table, local_vars, module_name
+                )
+                if res_status and res_fqn != current_function_fqn and res_fqn != current_class_fqn:
+                    meta = symbol_table.get(res_fqn)
+                    if meta:
+                        source_id = current_function_fqn if current_function_fqn else current_class_fqn
+                        m_type = meta.get("type")
+                        if m_type in ("class", "method", "function"):
+                            relations.append({
+                                "source": source_id,
+                                "target": res_fqn,
+                                "relation": "references",
+                                "resolved": True,
+                                "confidence": confidence,
+                                "file_path": file_path,
+                                "line": node.start_point[0] + 1
+                            })
+                        elif m_type == "variable":
+                            relations.append({
+                                "source": source_id,
+                                "target": res_fqn,
+                                "relation": "reads_variable",
+                                "resolved": True,
+                                "confidence": confidence,
+                                "file_path": file_path,
+                                "line": node.start_point[0] + 1
+                            })
+                            relations.append({
+                                "source": source_id,
+                                "target": res_fqn,
+                                "relation": "uses_global",
+                                "resolved": True,
+                                "confidence": confidence,
+                                "file_path": file_path,
+                                "line": node.start_point[0] + 1
+                            })
+                            relations.append({
+                                "source": source_id,
+                                "target": res_fqn,
+                                "relation": "references",
+                                "resolved": True,
+                                "confidence": confidence,
+                                "file_path": file_path,
+                                "line": node.start_point[0] + 1
+                            })
+
 
         for child in node.children:
             walk(child)
 
     walk(root)
     return relations, resolved_count, unresolved_count
+
 
 
 def extract_function_calls(code, file_path):

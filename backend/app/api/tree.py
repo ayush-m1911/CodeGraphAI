@@ -153,4 +153,91 @@ def symbol_lookup():
         "APIRouter"
     )
 
-    return result
+    return result
+
+
+@router.get("/graph/symbol/{symbol_name}")
+def get_symbol_graph(symbol_name: str):
+    """
+    Extracts the symbol node and its incoming/outgoing connections.
+    """
+    from app.services.graph_retriever import load_graph
+    graph = load_graph()
+    sub_nodes = []
+    sub_edges = []
+    seen_node_ids = set()
+    
+    for edge in graph["edges"]:
+        if edge["source"] == symbol_name or edge["target"] == symbol_name:
+            sub_edges.append(edge)
+            seen_node_ids.add(edge["source"])
+            seen_node_ids.add(edge["target"])
+            
+    for node in graph["nodes"]:
+        if node["id"] == symbol_name or node["id"] in seen_node_ids:
+            sub_nodes.append(node)
+            
+    return {"nodes": sub_nodes, "edges": sub_edges}
+
+
+@router.get("/graph/neighbors/{symbol_name}")
+def get_symbol_neighbors(symbol_name: str):
+    """
+    Returns adjacent neighbors for a symbol to support lazy expansion.
+    """
+    from app.services.graph_retriever import get_neighbors, load_graph
+    neighbors = get_neighbors(symbol_name)
+    graph = load_graph()
+    
+    sub_nodes = []
+    sub_edges = []
+    neighbor_names = {n["node"] for n in neighbors}
+    
+    for edge in graph["edges"]:
+        if (edge["source"] == symbol_name and edge["target"] in neighbor_names) or \
+           (edge["target"] == symbol_name and edge["source"] in neighbor_names):
+            sub_edges.append(edge)
+            
+    for node in graph["nodes"]:
+        if node["id"] == symbol_name or node["id"] in neighbor_names:
+            sub_nodes.append(node)
+            
+    return {"nodes": sub_nodes, "edges": sub_edges}
+
+
+@router.get("/graph/path")
+def get_graph_path(question: str):
+    """
+    Traces a GraphRAG question context to return the nodes and edges that participated in the retrieval path.
+    """
+    from app.services.graph_retriever import load_graph
+    from app.services.retrieval_orchestrator import route_query
+    
+    # Run intent routing to identify retrieved symbols
+    strategy, retrieved_data = route_query(question)
+    
+    retrieved_symbols = set()
+    if retrieved_data:
+        for chunk in retrieved_data:
+            if isinstance(chunk, dict) and chunk.get("symbol_name"):
+                retrieved_symbols.add(chunk["symbol_name"])
+            elif hasattr(chunk, "symbol_name"):
+                retrieved_symbols.add(chunk.symbol_name)
+                
+    graph = load_graph()
+    sub_nodes = []
+    sub_edges = []
+    
+    for edge in graph["edges"]:
+        if edge["source"] in retrieved_symbols or edge["target"] in retrieved_symbols:
+            sub_edges.append(edge)
+            
+    for node in graph["nodes"]:
+        is_retrieved = node["id"] in retrieved_symbols
+        node_copy = dict(node)
+        node_copy["isRetrieved"] = is_retrieved
+        if is_retrieved or node["id"] in {e["source"] for e in sub_edges} or node["id"] in {e["target"] for e in sub_edges}:
+            sub_nodes.append(node_copy)
+            
+    return {"nodes": sub_nodes, "edges": sub_edges}
+
