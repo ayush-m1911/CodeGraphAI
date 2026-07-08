@@ -60,3 +60,17 @@ class GraphMetadata(BaseModel):
     node_count: int = Field(0, description="Total node count.")
     edge_count: int = Field(0, description="Total edge count.")
     additional_info: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Metadata dictionary.")
+
+
+class UnresolvedReference(BaseModel):
+    """
+    Strongly typed model representing an unresolved code symbol reference during indexing.
+    """
+    symbol_name: str = Field(..., description="Simple or dotted name of the unresolved symbol.")
+    resolved_name: Optional[str] = Field(None, description="The FQN name resolution attempt, if any.")
+    file: str = Field(..., description="Source file containing the unresolved reference.")
+    line: Optional[int] = Field(None, description="Line number of the reference occurrence.")
+    reason: Optional[str] = Field(None, description="Reason why resolution failed.")
+    resolution_attempt: Optional[str] = Field(None, description="Description of the resolution strategy attempted.")
+    context: Optional[str] = Field(None, description="Context code snippet around reference.")
+

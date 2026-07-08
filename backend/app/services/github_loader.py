@@ -104,8 +104,16 @@ def clone_repository(repo_url: str, target_path: str = None) -> str:
         try:
             shutil.rmtree(target_path, onerror=on_rm_error)
         except Exception as e:
-            logger.error(f"Could not remove existing directory {target_path}: {e}")
-            raise RuntimeError(f"Could not remove existing repository directory {target_path}: {str(e)}")
+            logger.warning(f"shutil.rmtree failed for {target_path}: {e}. Retrying with aggressive shell rmdir...")
+            try:
+                # Resolve to absolute path and execute cmd rmdir
+                abs_target = os.path.abspath(target_path)
+                subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", abs_target], check=True)
+                logger.info(f"Successfully cleaned target directory aggressively: {target_path}")
+            except Exception as shell_err:
+                logger.error(f"Aggressive shell rmdir failed: {shell_err}")
+                raise RuntimeError(f"Could not remove existing repository directory {target_path}: {str(e)}")
+
 
     # 4. Clone repo using subprocess
     logger.info(f"Cloning repository {repo_url} into {target_path}...")

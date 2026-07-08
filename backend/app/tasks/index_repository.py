@@ -5,44 +5,70 @@ Defines Celery background tasks used by CodeGraphAI to process codebases asynchr
 Responsibilities:
 * Exposes the index_repository_task wrapper.
 * Handles progress state tracking via Celery's `self.update_state()`.
-* Implements automatic retries with exponential backoff on common failures.
+* Implements robust retry filters ensuring retries occur only on transient failures (git clone, network, DB limits).
+* Prevents infinite retry loops on syntax errors or code execution bugs.
+
+Failure handling:
+* Differentiates transient and non-transient exceptions.
+* deterministic bugs (KeyError, ValueError, syntax error) fail cleanly with reported diagnostic logs without retrying.
+
+Inputs:
+* Repository URL path, owner ID slug, and filesystem parameters.
+
+Outputs:
+* dict: Consolidated ingestion statistics.
 
 Interaction with other modules:
-* Triggered by `index.py` POST endpoints.
-* Calls `indexing_service.py` to drive the actual code analysis.
-* Interacts with Redis to store state.
-
-How it contributes to the production architecture:
-Maintains application resilience. By implementing exponential backoff retries for transient errors
-(e.g., git cloning limits, network timeouts, embedding API failures), it prevents pipeline crashes
-in production environments.
+* Triggered by index API endpoints.
+* Invokes `indexing_service.py` to run repository ingestion.
 """
 
 import logging
+import socket
 from app.workers.celery_app import celery_app
 from app.services.indexing_service import index_repository as service_index_repo
 
 logger = logging.getLogger("codegraphai.tasks")
 
 
+def is_transient_failure(exc: Exception) -> bool:
+    """
+    Checks if an exception is a transient infrastructure or connection failure.
+    Deterministic codebase parsing errors or coding bugs return False.
+    """
+    err_str = str(exc).lower()
+    
+    # Deterministic parser or python bugs - do not retry
+    non_transient_keywords = [
+        "keyerror", "parser", "syntaxerror", "indentationerror", 
+        "unsupported syntax", "attributeerror", "valueerror", "typeerror",
+        "assertionerror", "indexerror"
+    ]
+    if any(k in err_str for k in non_transient_keywords):
+        return False
+        
+    if isinstance(exc, (KeyError, ValueError, TypeError, AttributeError, SyntaxError, IndexError, AssertionError)):
+        return False
+        
+    # Standard connection exceptions are transient
+    if isinstance(exc, (ConnectionError, TimeoutError, socket.timeout, socket.error)):
+        return True
+        
+    # Infrastructure transient triggers
+    transient_keywords = [
+        "clone", "git", "network", "connection", "timeout", "unavailable", 
+        "redis", "qdrant", "groq", "rate limit", "http", "socket"
+    ]
+    if any(k in err_str for k in transient_keywords):
+        return True
+        
+    return False
+
+
 @celery_app.task(name="app.tasks.index_repository", bind=True, max_retries=3)
 def index_repository_task(self, repo_url: str, repo_id: str = None, repository_path: str = None) -> dict:
     """
     Asynchronously executes the repository indexing pipeline.
-
-    Parameters:
-        self: The Celery task instance bind context.
-        repo_url (str): The public GitHub URL of the repository.
-        repo_id (str, optional): A unique identifier for the repository.
-        repository_path (str, optional): Custom path to clone the repository.
-
-    Returns:
-        dict: Ingestion metrics summary.
-
-    Execution Flow:
-        1. Define progress_callback to translate indexing updates into Celery task states.
-        2. Execute service layer indexing coordination.
-        3. Catch failures (e.g. Git clone, network, API limits) and trigger retries with exponential backoff.
     """
     attempt = self.request.retries + 1
     logger.info(f"[Indexing] Starting async indexing task for: {repo_url} (Attempt {attempt}/3)")
@@ -68,10 +94,18 @@ def index_repository_task(self, repo_url: str, repo_id: str = None, repository_p
         logger.info(f"[Indexing] Completed indexing task successfully for: {repo_url}")
         return summary
     except Exception as exc:
-        # Calculate exponential backoff countdown: 5s, 10s, 20s
-        countdown = (2 ** self.request.retries) * 5
-        logger.error(
-            f"[Indexing] Attempt {attempt} failed for {repo_url}: {exc}. "
-            f"Retrying in {countdown}s..."
-        )
-        raise self.retry(exc=exc, countdown=countdown)
+        # Determine whether to retry or fail gracefully
+        if is_transient_failure(exc):
+            countdown = (2 ** self.request.retries) * 5
+            logger.error(
+                f"[Indexing] Attempt {attempt} failed with transient error: {exc}. "
+                f"Retrying in {countdown}s..."
+            )
+            raise self.retry(exc=exc, countdown=countdown)
+        else:
+            logger.error(
+                f"[Indexing] Attempt {attempt} failed with non-transient, deterministic error: {exc}. "
+                "Failing task gracefully without retry to avoid clogging background workers."
+            )
+            # Record diagnostics summary
+            raise exc

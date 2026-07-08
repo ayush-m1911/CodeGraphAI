@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context/AppContext';
 import LandingPage from './pages/LandingPage';
 import RepoSetupPage from './pages/RepoSetupPage';
 import ChatDashboard from './pages/ChatDashboard';
+import GraphViewDashboard from './pages/GraphViewDashboard';
 import ArchitectureModal from './components/ArchitectureModal';
 import Toast from './components/Toast';
 
@@ -53,6 +54,19 @@ function AppContent() {
           >
             Workspace {repoName && `(${repoName})`}
           </button>
+
+          <button 
+            onClick={() => {
+              if (indexingState === 'success') {
+                setCurrentPage('graph');
+              } else {
+                setCurrentPage('setup');
+              }
+            }} 
+            className={`hover:text-primary transition-colors ${currentPage === 'graph' ? 'text-primary font-bold' : ''}`}
+          >
+            Graph View
+          </button>
           
           <button 
             onClick={() => setIsArchModalOpen(true)}
@@ -68,7 +82,9 @@ function AppContent() {
         {currentPage === 'landing' && <LandingPage onNavigate={setCurrentPage} />}
         {currentPage === 'setup' && <RepoSetupPage onNavigate={setCurrentPage} />}
         {currentPage === 'chat' && <ChatDashboard onNavigate={setCurrentPage} />}
+        {currentPage === 'graph' && <GraphViewDashboard onNavigate={setCurrentPage} />}
       </main>
+
 
       {/* Footer Branding */}
       <footer className="py-4 border-t border-white/5 bg-black/40 text-center text-[10px] text-text-secondary/30 select-none">
