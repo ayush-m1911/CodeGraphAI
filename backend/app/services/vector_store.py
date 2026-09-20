@@ -77,18 +77,26 @@ def create_collection(vector_size: int, collection_name: str = None):
     collections = client.get_collections()
     existing = [c.name for c in collections.collections]
 
-    if col_name in existing:
-        logger.info(f"Qdrant collection '{col_name}' already exists.")
-        return
-
     logger.info(f"Creating new Qdrant collection: '{col_name}' (dim={vector_size})")
-    client.create_collection(
-        collection_name=col_name,
-        vectors_config=VectorParams(
-            size=vector_size,
-            distance=Distance.COSINE
+    if col_name not in existing:
+        client.create_collection(
+            collection_name=col_name,
+            vectors_config=VectorParams(
+                size=vector_size,
+                distance=Distance.COSINE
+            )
         )
-    )
+
+    # Ensure required payload keyword indexes exist for filtering
+    for field in ["symbol_name", "user_id", "repository_id", "file_path"]:
+        try:
+            client.create_payload_index(
+                collection_name=col_name,
+                field_name=field,
+                field_schema="keyword"
+            )
+        except Exception:
+            pass
 
 
 def store_chunks(
@@ -198,11 +206,28 @@ def search_by_symbol(
             FieldCondition(key="repository_id", match=MatchValue(value=str(repository_id)))
         )
 
-    result = client.scroll(
-        collection_name=col_name,
-        scroll_filter=Filter(must=filter_conditions),
-        limit=5
-    )
-    return result[0]
+    try:
+        result = client.scroll(
+            collection_name=col_name,
+            scroll_filter=Filter(must=filter_conditions),
+            limit=5
+        )
+        return result[0]
+    except Exception as e:
+        logger.warning(f"Qdrant search_by_symbol query issue on '{symbol_name}': {e}. Ensuring index and retrying...")
+        try:
+            client.create_payload_index(
+                collection_name=col_name,
+                field_name="symbol_name",
+                field_schema="keyword"
+            )
+            result = client.scroll(
+                collection_name=col_name,
+                scroll_filter=Filter(must=filter_conditions),
+                limit=5
+            )
+            return result[0]
+        except Exception:
+            return []
 
 
