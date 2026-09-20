@@ -1,6 +1,33 @@
 version: '3.8'
 
 services:
+  # PostgreSQL relational database for users, multi-tenant repos, chat history, and symbols
+  postgres:
+    image: postgres:16-alpine
+    container_name: codegraph_postgres
+    environment:
+      POSTGRES_USER: codegraph
+      POSTGRES_PASSWORD: codegraph_password
+      POSTGRES_DB: codegraph_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  # Neo4j Graph Database for code symbol hierarchy and caller-callee graphs
+  neo4j:
+    image: neo4j:5-community
+    container_name: codegraph_neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/codegraph_password
+    volumes:
+      - neo4j_data:/data
+    restart: always
+
   # Message broker and Celery backend
   redis:
     image: redis:alpine
@@ -32,8 +59,15 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - QDRANT_URL=http://qdrant:6333
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://codegraph:codegraph_password@postgres:5432/codegraph_db
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=codegraph_password
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-codegraph_super_secret_jwt_key_2026}
       - COLLECTION_NAME=repo_chunks
     depends_on:
+      - postgres
+      - neo4j
       - redis
       - qdrant
     # Mount local backend volumes so code graph files are synced
@@ -53,8 +87,15 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - QDRANT_URL=http://qdrant:6333
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://codegraph:codegraph_password@postgres:5432/codegraph_db
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=codegraph_password
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-codegraph_super_secret_jwt_key_2026}
       - COLLECTION_NAME=repo_chunks
     depends_on:
+      - postgres
+      - neo4j
       - redis
       - qdrant
     volumes:
@@ -63,30 +104,32 @@ services:
     restart: always
 
   # Celery monitoring dashboard
-    # Celery monitoring dashboard
   flower:
     build:
       context: ./backend
       dockerfile: Dockerfile
-
     container_name: codegraph_flower
-
     command: celery -A app.workers.celery_app flower --port=5555
-
     ports:
       - "5555:5555"
-
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - QDRANT_URL=http://qdrant:6333
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://codegraph:codegraph_password@postgres:5432/codegraph_db
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=codegraph_password
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-codegraph_super_secret_jwt_key_2026}
       - COLLECTION_NAME=repo_chunks
-
     depends_on:
+      - postgres
+      - neo4j
       - redis
       - qdrant
-
     restart: always
+
+
   # React Frontend (Vite)
   frontend:
     build:
@@ -102,4 +145,7 @@ services:
     restart: always
 
 volumes:
+  postgres_data:
   qdrant_data:
+  neo4j_data:
+

@@ -25,12 +25,22 @@ class Settings(BaseSettings):
     collection_name: str
     groq_api_key: str
     redis_url: str = "redis://localhost:6379/0"
+    database_url: str = "postgresql://codegraph:codegraph_password@localhost:5432/codegraph_db"
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "codegraph_password"
+    jwt_secret_key: str = "codegraph_super_secret_jwt_key_2026"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
+    llm_model: str = "openai/gpt-oss-120b"
 
     class Config:
         env_file = ".env"
         extra = "ignore"  # Allow extraneous environment variables during container orchestration
 
 
+
 # Global settings singleton used by the API and worker containers
 settings = Settings()
+
 
