@@ -21,9 +21,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    qdrant_url: str
-    collection_name: str
-    groq_api_key: str
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = None
+    collection_name: str = "repo_chunks"
+    groq_api_key: str = ""
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://codegraph:codegraph_password@localhost:5432/codegraph_db"
     neo4j_uri: str = "bolt://localhost:7687"

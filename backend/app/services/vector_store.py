@@ -30,11 +30,15 @@ from app.config import settings
 logger = logging.getLogger("codegraphai.vector_store")
 
 try:
-    # Attempt connecting to Docker Qdrant service
-    client = QdrantClient(
-        url=settings.qdrant_url,
-        timeout=3.0
-    )
+    # Attempt connecting to Qdrant service (supports both local and Qdrant Cloud)
+    client_kwargs = {
+        "url": settings.qdrant_url,
+        "timeout": 5.0
+    }
+    if getattr(settings, "qdrant_api_key", None):
+        client_kwargs["api_key"] = settings.qdrant_api_key
+
+    client = QdrantClient(**client_kwargs)
     client.get_collections()
     logger.info(f"Successfully connected to Qdrant server at {settings.qdrant_url}")
 except Exception as e:
