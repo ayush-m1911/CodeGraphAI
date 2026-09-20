@@ -180,13 +180,17 @@ class RetrievalOrchestrator:
     Staged query context coordinator implementing intent routing and graph expansions.
     """
     
-    def orchestrate(self, question: str, max_context_size: int = 12) -> Tuple[List[dict], str, List[str], float]:
+    def orchestrate(
+        self,
+        question: str,
+        user_id: str = None,
+        repository_id: str = None,
+        max_context_size: int = 12
+    ) -> Tuple[List[dict], str, List[str], float]:
         """
-        Coordinates the staged pipeline stages:
-        Question -> Intent Detection -> Entity Extraction -> Symbol Resolution -> Graph Expansion ->
-        Vector Retrieval -> Context Merge -> Deduplication -> Ranking -> LLM.
+        Executes the multi-stage, intent-aware retrieval pipeline with multi-tenant filtering.
         """
-        strategies_used = ["Intent Detection"]
+        strategies_used = []
         
         # 1. Intent Detection
         intent = detect_intent(question)
@@ -246,9 +250,14 @@ class RetrievalOrchestrator:
                             break
                     graph_chunks.append(chunk)
 
-        # 5. Vector Retrieval
+        # 5. Vector Retrieval with Tenant Isolation
         strategies_used.append("Vector Retrieval")
-        vector_chunks = retrieve_context(question, top_k=4)
+        vector_chunks = retrieve_context(
+            question,
+            top_k=4,
+            user_id=user_id,
+            repository_id=repository_id
+        )
 
         # 6. Context Merge
         merged_chunks = []

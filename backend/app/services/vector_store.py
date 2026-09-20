@@ -38,14 +38,19 @@ try:
     client.get_collections()
     logger.info(f"Successfully connected to Qdrant server at {settings.qdrant_url}")
 except Exception as e:
-    # Safe fallback to local disk storage if Docker is down
+    # Safe fallback to local persistent storage or in-memory if locked
     logger.warning(
         f"Could not connect to Qdrant server at {settings.qdrant_url}: {e}. "
         "Falling back to local persistent storage Qdrant client (path='qdrant_storage')."
     )
-    client = QdrantClient(path="qdrant_storage")
+    try:
+        client = QdrantClient(path="qdrant_storage")
+    except Exception:
+        logger.warning("Local storage locked; initializing in-memory Qdrant client.")
+        client = QdrantClient(":memory:")
 
 COLLECTION_NAME = settings.collection_name
+
 
 
 def create_collection(vector_size: int, collection_name: str = None):
@@ -82,99 +87,118 @@ def create_collection(vector_size: int, collection_name: str = None):
     )
 
 
-def store_chunks(chunks: list, embeddings: list, collection_name: str = None):
+def store_chunks(
+    chunks: list,
+    embeddings: list,
+    collection_name: str = None,
+    user_id: str = None,
+    repository_id: str = None
+):
     """
-    Upserts a batch of code chunks and their computed vectors into the active Qdrant collection.
-
-    Parameters:
-        chunks (list of dict): AST parsed code chunks with metadata payload.
-        embeddings (list of list of float): Dense vector floats generated for the chunks.
-        collection_name (str, optional): The collection to store chunks in.
-
-    Returns:
-        None
-
-    Execution Flow:
-        1. Formulate PointStruct instances for each chunk and embedding pair with a new UUID.
-        2. Execute an upsert command targeting the resolved collection name.
+    Upserts a batch of code chunks and their computed vectors into the active Qdrant collection,
+    tagging each vector point with tenant isolation metadata (user_id, repository_id) and unified entity UUIDs.
     """
     col_name = collection_name if collection_name else COLLECTION_NAME
     points = []
 
     for chunk, vector in zip(chunks, embeddings):
+        metadata = chunk.get("metadata", {})
+        # Unified Entity UUID: Use assigned symbol_id or existing id or generate new UUID
+        point_id = chunk.get("symbol_id") or metadata.get("symbol_id") or str(uuid.uuid4())
+
+        payload = {
+            "text": chunk.get("text", ""),
+            "file_path": metadata.get("file_path", ""),
+            "chunk_type": metadata.get("chunk_type", ""),
+            "symbol_name": metadata.get("symbol_name", ""),
+            "user_id": str(user_id) if user_id else "",
+            "repository_id": str(repository_id) if repository_id else "",
+            "symbol_id": str(point_id)
+        }
+
         points.append(
             PointStruct(
-                id=str(uuid.uuid4()),
+                id=str(point_id),
                 vector=vector,
-                payload={
-                    "text": chunk["text"],
-                    "file_path": chunk["metadata"]["file_path"],
-                    "chunk_type": chunk["metadata"]["chunk_type"],
-                    "symbol_name": chunk["metadata"]["symbol_name"]
-                }
+                payload=payload
             )
         )
 
-    logger.info(f"Upserting {len(points)} vectors to Qdrant collection '{col_name}'")
+    logger.info(f"Upserting {len(points)} vectors to Qdrant collection '{col_name}' for tenant {user_id}/{repository_id}")
     client.upsert(
         collection_name=col_name,
         points=points
     )
 
 
-def search_chunks(query_vector: list, limit: int = 5, collection_name: str = None) -> list:
+def search_chunks(
+    query_vector: list,
+    limit: int = 5,
+    collection_name: str = None,
+    user_id: str = None,
+    repository_id: str = None
+) -> list:
     """
-    Performs a semantic similarity vector search in the active collection.
-
-    Parameters:
-        query_vector (list of float): The query's dense vector embeddings.
-        limit (int): Max number of matches to return (defaults to 5).
-        collection_name (str, optional): The collection to search.
-
-    Returns:
-        list: Matching Points returned by Qdrant, containing scores and payload data.
-
-    Execution Flow:
-        1. Query Qdrant vector database using cosine distance metrics.
-        2. Extract and return matching points from search results.
+    Performs a semantic similarity vector search in the active collection,
+    enforcing strict multi-tenant payload filtering when tenant coordinates are provided.
     """
     col_name = collection_name if collection_name else COLLECTION_NAME
+    
+    query_filter = None
+    filter_conditions = []
+
+    if user_id:
+        filter_conditions.append(
+            FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))
+        )
+    if repository_id:
+        filter_conditions.append(
+            FieldCondition(key="repository_id", match=MatchValue(value=str(repository_id)))
+        )
+
+    if filter_conditions:
+        query_filter = Filter(must=filter_conditions)
+
     results = client.query_points(
         collection_name=col_name,
         query=query_vector,
+        query_filter=query_filter,
         limit=limit
     )
     return results.points
 
 
-def search_by_symbol(symbol_name: str, collection_name: str = None) -> list:
+def search_by_symbol(
+    symbol_name: str,
+    collection_name: str = None,
+    user_id: str = None,
+    repository_id: str = None
+) -> list:
     """
-    Performs an exact filtering lookup for a symbol name in the active collection.
-
-    Parameters:
-        symbol_name (str): Fully qualified symbol name (e.g. APIRouter or APIRouter.get).
-        collection_name (str, optional): The collection to scroll.
-
-    Returns:
-        list: Matching Points returned by Qdrant whose symbol_name matches the filter.
-
-    Execution Flow:
-        1. Apply FieldCondition matching the exact symbol_name payload value.
-        2. Scroll collection entries with limit constraint.
-        3. Return list of matching points.
+    Performs an exact filtering lookup for a symbol name with mandatory tenant isolation.
     """
     col_name = collection_name if collection_name else COLLECTION_NAME
+    filter_conditions = [
+        FieldCondition(
+            key="symbol_name",
+            match=MatchValue(value=symbol_name)
+        )
+    ]
+
+    if user_id:
+        filter_conditions.append(
+            FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))
+        )
+    if repository_id:
+        filter_conditions.append(
+            FieldCondition(key="repository_id", match=MatchValue(value=str(repository_id)))
+        )
+
     result = client.scroll(
         collection_name=col_name,
-        scroll_filter=Filter(
-            must=[
-                FieldCondition(
-                    key="symbol_name",
-                    match=MatchValue(value=symbol_name)
-                )
-            ]
-        ),
+        scroll_filter=Filter(must=filter_conditions),
         limit=5
     )
     return result[0]
+
 

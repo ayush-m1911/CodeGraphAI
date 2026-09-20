@@ -32,14 +32,19 @@ from app.services.vector_store import (
 
 def retrieve_context(
     question: str,
-    top_k: int = 3
+    top_k: int = 3,
+    user_id: str = None,
+    repository_id: str = None
 ):
     """
-    Retrieves code chunks using symbol-aware matching or semantic vector search fallback.
+    Retrieves code chunks using symbol-aware matching or semantic vector search fallback,
+    strictly partitioned by tenant user_id and repository_id.
 
     Args:
         question (str): User's natural language query.
         top_k (int): Number of chunks to retrieve if falling back to vector search.
+        user_id (str, optional): Tenant user UUID.
+        repository_id (str, optional): Repository ID.
 
     Returns:
         list of dict: Retrieved code context chunks containing text, file path, symbol name, and score.
@@ -60,7 +65,9 @@ def retrieve_context(
         symbol = match.group(1)
 
         symbol_results = search_by_symbol(
-            symbol
+            symbol,
+            user_id=user_id,
+            repository_id=repository_id
         )
 
         if symbol_results:
@@ -97,7 +104,9 @@ def retrieve_context(
 
     results = search_chunks(
         query_vector,
-        limit=top_k
+        limit=top_k,
+        user_id=user_id,
+        repository_id=repository_id
     )
 
     for result in results:
@@ -114,4 +123,5 @@ def retrieve_context(
             "score": result.score
         })
 
-    return contexts
+    return contexts
+

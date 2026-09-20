@@ -43,30 +43,20 @@ from app.services.retrieval_orchestrator import RetrievalOrchestrator
 orchestrator = RetrievalOrchestrator()
 
 
-def hybrid_retrieve(question: str):
+def hybrid_retrieve(question: str, user_id: str = None, repository_id: str = None):
     """
     Executes intent-aware retrieval for a query, returning only the ranked context.
-    This remains fully backward compatible with the original signature.
-
-    Args:
-        question (str): User's natural language question.
-
-    Returns:
-        list of dict: Ranked and deduplicated code context chunks.
     """
-    context, _, _ = orchestrator.orchestrate(question)
+    context, _, _, _ = orchestrator.orchestrate(question, user_id=user_id, repository_id=repository_id)
     return context
 
 
-def hybrid_retrieve_detailed(question: str) -> tuple:
+def hybrid_retrieve_detailed(
+    question: str,
+    user_id: str = None,
+    repository_id: str = None
+) -> tuple:
     """
-    Executes intent-aware retrieval for a query, returning the ranked context along with
-    the detected intent and the list of retrieval strategies executed.
-
-    Args:
-        question (str): User's natural language question.
-
-    Returns:
-        tuple: (context: list of dict, intent: str, strategies_used: list of str)
+    Executes intent-aware retrieval for a query with tenant isolation.
     """
-    return orchestrator.orchestrate(question)
+    return orchestrator.orchestrate(question, user_id=user_id, repository_id=repository_id)

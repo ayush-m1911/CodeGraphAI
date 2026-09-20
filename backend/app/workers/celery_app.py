@@ -18,18 +18,40 @@ Provides the central Celery task queue controller. By binding to external Redis 
 through the central configuration parameters, it supports horizontal worker scaling across containers.
 """
 
+import logging
+import redis
 from celery import Celery
 from app.config import settings
 
-# Instantiate the Celery app instance using the centralized settings
-celery_app = Celery(
-    "codegraphai_workers",
-    broker=settings.redis_url,
-    backend=settings.redis_url
-)
+logger = logging.getLogger("codegraphai.celery")
+
+# Check if Redis is reachable, otherwise fallback to in-memory eager execution
+is_redis_available = False
+try:
+    r = redis.Redis.from_url(settings.redis_url, socket_timeout=1.0)
+    r.ping()
+    is_redis_available = True
+    logger.info("Successfully connected to Redis broker.")
+except Exception as e:
+    logger.warning("Redis is not available. Celery will execute tasks locally in eager mode.")
+
+if is_redis_available:
+    celery_app = Celery(
+        "codegraphai_workers",
+        broker=settings.redis_url,
+        backend=settings.redis_url
+    )
+else:
+    celery_app = Celery(
+        "codegraphai_workers",
+        broker="memory://",
+        backend="cache+memory://"
+    )
 
 # Celery Application Configurations
 celery_app.conf.update(
+    task_always_eager=not is_redis_available,
+    task_eager_propagates=False,
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
@@ -39,3 +61,4 @@ celery_app.conf.update(
     # Discover tasks under app.tasks
     imports=["app.tasks.index_repository"]
 )
+
