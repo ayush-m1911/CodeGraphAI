@@ -19,12 +19,19 @@ db_url = settings.database_url
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# Configure connection pooling
+# Configure connection engine (handles both SQLite and PostgreSQL gracefully)
+connect_args = {}
+engine_kwargs = {"pool_pre_ping": True}
+if db_url.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
+else:
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
+
 engine = create_engine(
     db_url,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20
+    connect_args=connect_args,
+    **engine_kwargs
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
