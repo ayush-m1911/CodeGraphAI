@@ -55,11 +55,22 @@ yarn-error.log*
 pnpm-debug.log*
 
 # ==========================
-# Testing / Coverage
+# Testing / Coverage & Verification
 # ==========================
 .coverage
 .pytest_cache/
 htmlcov/
+test_*.py
+verify_*.py
+backend/test_*.py
+tests/
+
+# ==========================
+# Guidance Docs & PDFs
+# ==========================
+*.pdf
+backend/*.pdf
+generate_pdf_guide.py
 
 # ==========================
 # Misc

@@ -29,6 +29,12 @@ qdrant_storage/
 .pytest_cache/
 .coverage
 htmlcov/
+test_*.py
+verify_*.py
+
+# Documentation & PDFs
+*.pdf
+generate_pdf_guide.py
 
 # IDE
 .vscode/

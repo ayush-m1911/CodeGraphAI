@@ -1,21 +1,10 @@
 /**
  * Purpose:
- * Global React context provider managing states and asynchronous operations for CodeGraphAI.
- *
- * Role in CodeGraphAI:
- * Serves as the central state hub of the frontend application. It orchestrates user workflows
- * such as repo indexing progress states, chat message feeds, supporting source card displays,
- * active knowledge graph rendering data, and global warning/success notifications.
- *
- * Key Responsibilities:
- * - Manage reactive state variables (repoUrl, repoName, indexingState, chatMessages, graphData, active sources).
- * - Handle step-by-step repository onboarding simulations mapped to the backend indexing lifecycle.
- * - Call the backend index endpoints (`indexRepository`) and load graphs (`fetchGraph`).
- * - Send user questions (`sendQuery`) to the `/chat` API.
- * - Expose clean state reset handlers (`clearChat`, `resetAll`).
+ * Central React Context Provider managing Authentication, Multi-Tenant Repositories,
+ * Conversational Memory Threads, and Indexing/Chat pipelines.
  */
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { apiService } from '../services/api';
 
 const AppContext = createContext();
@@ -29,23 +18,34 @@ export const useApp = () => {
 };
 
 export const AppProvider = ({ children }) => {
-  // Repository Setup State
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('codegraph_token') || null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
+  // Multi-Tenant Repositories & History
+  const [userRepos, setUserRepos] = useState([]);
+  const [activeRepo, setActiveRepo] = useState(null);
   const [repoUrl, setRepoUrl] = useState('');
   const [repoName, setRepoName] = useState('');
-  const [indexingState, setIndexingState] = useState('idle'); // idle | indexing | success | error
-  const [indexingStep, setIndexingStep] = useState(0); // 0 to 5
-  const [indexingPercent, setIndexingPercent] = useState(0);
-  const [indexingLog, setIndexingLog] = useState('');
   
-  // Chat State
+  // Conversational Memory Threads
+  const [conversations, setConversations] = useState([]);
+  const [activeConversation, setActiveConversation] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [previousQuestions, setPreviousQuestions] = useState([]);
 
+  // Indexing State
+  const [indexingState, setIndexingState] = useState('idle'); // idle | indexing | success | error
+  const [indexingStep, setIndexingStep] = useState(0); // 0 to 5
+  const [indexingPercent, setIndexingPercent] = useState(0);
+  const [indexingLog, setIndexingLog] = useState('');
+
   // Graph and Source States
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
   const [selectedSource, setSelectedSource] = useState(null);
-  
+
   // UI Modals & Notifications
   const [isArchModalOpen, setIsArchModalOpen] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -58,25 +58,182 @@ export const AppProvider = ({ children }) => {
     setToast({ message: '', type: 'info' });
   };
 
-  // Stepper descriptions for indexing
   const indexingSteps = [
     { label: 'GitHub URL Validation', desc: 'Analyzing URL and verifying Python constraints...' },
     { label: 'Repository Ingestion', desc: 'Cloning Python source code files from GitHub...' },
     { label: 'AST-Aware Parsing', desc: 'Traversing AST structures and extracting classes & methods...' },
     { label: 'Vector Generation', desc: 'Computing local embeddings for parsed chunks...' },
-    { label: 'Qdrant Store Upload', desc: 'Upserting vectors into vector database...' },
-    { label: 'GraphRAG Construction', desc: 'Mapping function calls, containment & relationships...' }
+    { label: 'Qdrant Store Upload', desc: 'Upserting vectors into vector database with tenant payload tags...' },
+    { label: 'GraphRAG Construction', desc: 'Partitioning Neo4j & knowledge graph relationships...' }
   ];
 
-  // Load state from local storage on mount (optional mock history)
-  useEffect(() => {
-    const savedQuestions = localStorage.getItem('codegen_questions');
-    if (savedQuestions) {
-      setPreviousQuestions(JSON.parse(savedQuestions));
+  // ---------------- AUTHENTICATION HANDLERS ----------------
+
+  const loadUserProfile = useCallback(async () => {
+    try {
+      const user = await apiService.getMe();
+      setCurrentUser(user);
+    } catch (err) {
+      console.warn('Session expired or invalid token:', err);
+      logout();
     }
   }, []);
 
-  // Indexing Handler
+  const loadUserRepositories = useCallback(async () => {
+    if (!token) return;
+    try {
+      const repos = await apiService.listRepositories();
+      setUserRepos(repos);
+      if (repos.length > 0 && !activeRepo) {
+        selectRepository(repos[0]);
+      }
+    } catch (err) {
+      console.error('Failed to load user repositories:', err);
+    }
+  }, [token, activeRepo]);
+
+  useEffect(() => {
+    if (token) {
+      loadUserProfile();
+      loadUserRepositories();
+    }
+  }, [token, loadUserProfile, loadUserRepositories]);
+
+  const login = async ({ email, password }) => {
+    const data = await apiService.login({ email, password });
+    localStorage.setItem('codegraph_token', data.access_token);
+    setToken(data.access_token);
+    setCurrentUser(data.user);
+    triggerToast(`Welcome back, ${data.user.email}!`, 'success');
+    await loadUserRepositories();
+    return data;
+  };
+
+  const signup = async ({ email, password, tier }) => {
+    const data = await apiService.signup({ email, password, tier });
+    localStorage.setItem('codegraph_token', data.access_token);
+    setToken(data.access_token);
+    setCurrentUser(data.user);
+    triggerToast(`Account created successfully (${data.user.tier} tier)!`, 'success');
+    return data;
+  };
+
+  const logout = () => {
+    localStorage.removeItem('codegraph_token');
+    setToken(null);
+    setCurrentUser(null);
+    setUserRepos([]);
+    setActiveRepo(null);
+    setConversations([]);
+    setActiveConversation(null);
+    setChatMessages([]);
+    triggerToast('Logged out successfully.', 'info');
+  };
+
+  // ---------------- REPOSITORY & CONVERSATIONS HANDLERS ----------------
+
+  const selectRepository = async (repo) => {
+    setActiveRepo(repo);
+    setRepoName(repo.name);
+    setRepoUrl(repo.git_url);
+    setIndexingState('success');
+    setSelectedSource(null);
+
+    // Load conversations for this repository
+    try {
+      const convs = await apiService.listConversations(repo.id);
+      setConversations(convs);
+      if (convs.length > 0) {
+        selectConversation(convs[0]);
+      } else {
+        createNewConversation(repo.id, 'Initial Analysis');
+      }
+    } catch (err) {
+      console.error('Failed to load conversations for repo:', err);
+    }
+
+    // Load graph
+    try {
+      const graphRes = await apiService.fetchGraph();
+      if (graphRes && !graphRes.error) {
+        setGraphData(graphRes);
+      }
+    } catch (err) {
+      console.error('Failed to load active graph data:', err);
+    }
+  };
+
+  const selectConversation = async (conv) => {
+    if (!conv) return;
+    setActiveConversation(conv);
+    try {
+      const messages = await apiService.getConversationMessages(conv.id);
+      const formatted = messages.map((m) => {
+        let strategies = [];
+        if (Array.isArray(m.retrieval_strategy)) {
+          strategies = m.retrieval_strategy;
+        } else if (typeof m.retrieval_strategy === 'string') {
+          strategies = m.retrieval_strategy.split(', ').map((s) => s.trim()).filter(Boolean);
+        }
+        return {
+          id: m.id,
+          sender: m.role,
+          text: m.content,
+          sources: m.sources || [],
+          intent: strategies[0] || m.retrieval_strategy || null,
+          retrieval_strategy: strategies,
+          timestamp: new Date(m.created_at)
+        };
+      });
+      setChatMessages(formatted);
+    } catch (err) {
+      console.error('Failed to load conversation messages:', err);
+      setChatMessages([]);
+    }
+  };
+
+  const createNewConversation = async (repoId = null, title = 'New Conversation') => {
+    const targetRepoId = repoId || activeRepo?.id;
+    if (!targetRepoId) return null;
+
+    try {
+      const newConv = await apiService.createConversation({
+        repository_id: targetRepoId,
+        title: title || 'New Conversation'
+      });
+      setConversations((prev) => [newConv, ...prev.filter((c) => c.id !== newConv.id)]);
+      setActiveConversation(newConv);
+      setChatMessages([]);
+      setSelectedSource(null);
+      return newConv;
+    } catch (err) {
+      console.error('Failed to create new conversation:', err);
+      triggerToast('Could not start new chat session.', 'error');
+      return null;
+    }
+  };
+
+  const deleteConversation = async (convId) => {
+    try {
+      await apiService.deleteConversation(convId);
+      const remaining = conversations.filter((c) => c.id !== convId);
+      setConversations(remaining);
+      if (activeConversation?.id === convId) {
+        if (remaining.length > 0) {
+          selectConversation(remaining[0]);
+        } else {
+          setActiveConversation(null);
+          setChatMessages([]);
+        }
+      }
+      triggerToast('Conversation deleted.', 'info');
+    } catch (err) {
+      console.error('Failed to delete conversation:', err);
+    }
+  };
+
+  // ---------------- INDEXING HANDLER ----------------
+
   const indexRepository = async (url) => {
     setRepoUrl(url);
     setIndexingState('indexing');
@@ -87,8 +244,27 @@ export const AppProvider = ({ children }) => {
     setChatMessages([]);
 
     try {
-      // Trigger backend index request
-      const startRes = await apiService.indexRepository(url);
+      // 1. Register repository in multi-tenant PostgreSQL if user is logged in
+      let repoRecord = null;
+      if (currentUser) {
+        const urlParts = url.rstrip ? url.rstrip('/').split('/') : url.replace(/\/$/, '').split('/');
+        const defaultName = urlParts.slice(-2).join('/');
+        try {
+          repoRecord = await apiService.createRepository({
+            name: defaultName,
+            git_url: url,
+            is_private: false
+          });
+          setActiveRepo(repoRecord);
+          setRepoName(repoRecord.name);
+          setUserRepos((prev) => [repoRecord, ...prev.filter((r) => r.id !== repoRecord.id)]);
+        } catch (rErr) {
+          console.warn('Repository registration notice:', rErr);
+        }
+      }
+
+      // 2. Trigger backend Celery index request
+      const startRes = await apiService.indexRepository(url, repoRecord?.id);
       const jobId = startRes.job_id;
 
       let jobFinished = false;
@@ -96,9 +272,8 @@ export const AppProvider = ({ children }) => {
 
       while (!jobFinished) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        
         const jobRes = await apiService.getJobStatus(jobId);
-        
+
         if (jobRes.status === 'PENDING') {
           setIndexingStep(0);
           setIndexingPercent(5);
@@ -107,26 +282,20 @@ export const AppProvider = ({ children }) => {
           setIndexingStep(1);
           setIndexingPercent(10);
           setIndexingLog('Celery worker started execution...');
-        } else if (jobRes.status === 'RETRY') {
-          setIndexingPercent(5);
-          setIndexingLog(`Task failed, retrying backend execution: ${jobRes.error || 'Transient connection issue'}`);
         } else if (jobRes.status === 'PROGRESS') {
           const pct = jobRes.progress?.percent || 0;
           const desc = jobRes.progress?.description || 'Indexing repository...';
-          
           setIndexingPercent(pct);
           setIndexingLog(desc);
-          
-          // Map backend percentages to frontend stepper steps
+
           let step = 0;
           if (pct >= 100) step = 5;
-          else if (pct >= 95) step = 5; // Vector storage complete, graph construction active
-          else if (pct >= 80) step = 4; // Embedding complete, Qdrant store upload active
-          else if (pct >= 60) step = 5; // Knowledge graph construction complete
-          else if (pct >= 40) step = 3; // AST complete, Vector generation active
-          else if (pct >= 25) step = 2; // Parsed complete, AST active
-          else if (pct >= 10) step = 1; // Cloned complete, Parsing active
-          
+          else if (pct >= 95) step = 5;
+          else if (pct >= 80) step = 4;
+          else if (pct >= 60) step = 5;
+          else if (pct >= 40) step = 3;
+          else if (pct >= 25) step = 2;
+          else if (pct >= 10) step = 1;
           setIndexingStep(step);
         } else if (jobRes.status === 'SUCCESS') {
           jobFinished = true;
@@ -144,7 +313,18 @@ export const AppProvider = ({ children }) => {
       setIndexingLog('Repository successfully indexed and ready for chat reasoning.');
       triggerToast('Repository indexed successfully.', 'success');
 
-      // Load full graph representation from backend
+      // Refresh conversations
+      if (repoRecord) {
+        const convs = await apiService.listConversations(repoRecord.id);
+        setConversations(convs);
+        if (convs.length > 0) {
+          selectConversation(convs[0]);
+        } else {
+          createNewConversation(repoRecord.id, 'Initial Workspace Analysis');
+        }
+      }
+
+      // Load graph representation
       try {
         const graphRes = await apiService.fetchGraph();
         if (graphRes && !graphRes.error) {
@@ -157,27 +337,16 @@ export const AppProvider = ({ children }) => {
     } catch (error) {
       console.error(error);
       let errMsg = 'Unable to index repository.';
-      if (error.response?.data) {
-        const data = error.response.data;
-        if (data.error && data.details) {
-          errMsg = `${data.error}: ${data.details}`;
-        } else if (data.error) {
-          errMsg = data.error;
-        } else if (data.details) {
-          errMsg = data.details;
-        } else if (data.detail) {
-          errMsg = data.detail;
-        }
-      } else if (error.message) {
-        errMsg = error.message;
-      }
+      if (error.response?.data?.detail) errMsg = error.response.data.detail;
+      else if (error.message) errMsg = error.message;
       setIndexingState('error');
       setIndexingLog(errMsg);
       triggerToast(errMsg, 'error');
     }
   };
 
-  // Chat Query Handler
+  // ---------------- CHAT QUERY HANDLER ----------------
+
   const sendQuery = async (questionText) => {
     if (!questionText.trim()) return;
 
@@ -191,16 +360,13 @@ export const AppProvider = ({ children }) => {
     setChatMessages((prev) => [...prev, userMsg]);
     setIsChatLoading(true);
 
-    // Save questions history
-    if (!previousQuestions.includes(questionText)) {
-      const updatedQs = [questionText, ...previousQuestions].slice(0, 15);
-      setPreviousQuestions(updatedQs);
-      localStorage.setItem('codegen_questions', JSON.stringify(updatedQs));
-    }
-
     try {
-      const chatRes = await apiService.chat(questionText);
-      
+      const chatRes = await apiService.chat({
+        question: questionText,
+        repository_id: activeRepo?.id || null,
+        conversation_id: activeConversation?.id || null
+      });
+
       const assistantMsg = {
         id: (Date.now() + 1).toString(),
         sender: 'assistant',
@@ -209,11 +375,31 @@ export const AppProvider = ({ children }) => {
         intent: chatRes.intent,
         retrieval_strategy: chatRes.retrieval_strategy,
         confidence: chatRes.confidence,
+        contextualized_query: chatRes.contextualized_query,
         timestamp: new Date()
       };
 
-
       setChatMessages((prev) => [...prev, assistantMsg]);
+      setIsChatLoading(false);
+
+      // If active conversation had default title, update title locally and sync to backend
+      const defaultTitles = [
+        'New Chat', 
+        'New Conversation', 
+        'Initial Analysis', 
+        'Initial Workspace Analysis', 
+        'Untitled Thread'
+      ];
+      if (activeConversation && (defaultTitles.includes(activeConversation.title) || !activeConversation.title)) {
+        const newTitle = questionText.slice(0, 35) + (questionText.length > 35 ? '...' : '');
+        setActiveConversation((prev) => (prev ? { ...prev, title: newTitle } : prev));
+        setConversations((prev) =>
+          prev.map((c) => (c.id === activeConversation.id ? { ...c, title: newTitle } : c))
+        );
+        apiService.updateConversation(activeConversation.id, newTitle).catch((err) => {
+          console.warn('Background title update notice:', err);
+        });
+      }
     } catch (error) {
       console.error('Chat error:', error);
       triggerToast('Failed to fetch AI response.', 'error');
@@ -239,6 +425,8 @@ export const AppProvider = ({ children }) => {
   const resetAll = () => {
     setRepoUrl('');
     setRepoName('');
+    setActiveRepo(null);
+    setActiveConversation(null);
     setIndexingState('idle');
     setIndexingStep(0);
     setIndexingPercent(0);
@@ -252,6 +440,21 @@ export const AppProvider = ({ children }) => {
   return (
     <AppContext.Provider
       value={{
+        currentUser,
+        token,
+        isAuthModalOpen,
+        setIsAuthModalOpen,
+        userRepos,
+        activeRepo,
+        selectRepository,
+        conversations,
+        activeConversation,
+        selectConversation,
+        createNewConversation,
+        deleteConversation,
+        login,
+        signup,
+        logout,
         repoUrl,
         repoName,
         indexingState,
@@ -280,4 +483,5 @@ export const AppProvider = ({ children }) => {
     </AppContext.Provider>
   );
 };
+
 export default AppContext;

@@ -1,19 +1,3 @@
-/**
- * Purpose:
- * Main workspace dashboard for querying the indexed repository and traversing the knowledge graph.
- *
- * Role in CodeGraphAI:
- * Renders the triple-pane developer interface (Black + Gold aesthetic). It links chat inputs,
- * rendered Markdown responses, code copy elements, referenced source files, and the interactive
- * GraphRAG relation timeline panel into a unified cockpit.
- *
- * Key Responsibilities:
- * - Render ChatGPT-style chat feed wrapping Markdown rendering and custom code blocks.
- * - Display interactive source drawers to view retrieved file snippets and scores.
- * - Render the GraphRAG Context timeline panel displaying calls and containment paths dynamically.
- * - Provide prompt shortcut configurations and quick access controls (clear chat, new repo onboarding).
- */
-
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
@@ -30,9 +14,15 @@ import {
   FaChevronDown,
   FaCopy,
   FaCheck,
-  FaBars
+  FaBars,
+  FaPlus,
+  FaComments,
+  FaHistory,
+  FaLayerGroup,
+  FaExchangeAlt,
+  FaSyncAlt
 } from 'react-icons/fa';
-import { IoTerminalSharp } from 'react-icons/io5';
+import { IoTerminalSharp, IoSparklesSharp } from 'react-icons/io5';
 import { VscLoading } from 'react-icons/vsc';
 
 // Reusable Copy Button for Code Blocks
@@ -56,6 +46,15 @@ const CopyButton = ({ text }) => {
 
 export const ChatDashboard = ({ onNavigate }) => {
   const {
+    currentUser,
+    userRepos,
+    activeRepo,
+    selectRepository,
+    conversations,
+    activeConversation,
+    selectConversation,
+    createNewConversation,
+    deleteConversation,
     repoUrl,
     repoName,
     chatMessages,
@@ -72,6 +71,7 @@ export const ChatDashboard = ({ onNavigate }) => {
   const [inputVal, setInputVal] = useState('');
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isRepoDropdownOpen, setIsRepoDropdownOpen] = useState(false);
   const [expandedSources, setExpandedSources] = useState({});
 
   const messagesEndRef = useRef(null);
@@ -127,60 +127,150 @@ export const ChatDashboard = ({ onNavigate }) => {
     <div className="flex h-[90vh] overflow-hidden border-t border-white/5 relative bg-[#090909]">
       
       {/* 1. DESKTOP LEFT SIDEBAR */}
-      <aside className="w-64 bg-background border-r border-white/5 flex flex-col justify-between flex-shrink-0 hidden md:flex select-none">
+      <aside className="w-72 bg-background border-r border-white/5 flex flex-col justify-between flex-shrink-0 hidden md:flex select-none">
         {/* Top area */}
-        <div className="flex flex-col flex-1 overflow-y-auto p-4 space-y-6">
-          {/* Logo Title */}
-          <div className="flex items-center gap-2.5">
-            <span className="text-primary font-bold text-lg tracking-widest bg-primary/10 px-2.5 py-1 rounded border border-primary/20 shadow-[0_0_10px_rgba(212,175,55,0.1)]">CG</span>
-            <div className="flex flex-col">
-              <span className="text-sm font-extrabold tracking-wider gold-text-gradient">CodeGraphAI</span>
-              <span className="text-[9px] uppercase tracking-widest text-text-secondary">workspace</span>
-            </div>
-          </div>
-
-          {/* Current Repo Details */}
-          <div className="bg-surface border border-white/5 rounded-lg p-3.5 space-y-2">
-            <div className="flex items-center justify-between text-[10px] font-bold text-primary uppercase tracking-wider">
-              <span>Active Repository</span>
+        <div className="flex flex-col flex-1 overflow-y-auto p-4 space-y-5">
+          
+          {/* Repository Selector / Switcher */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[10px] font-bold text-text-secondary uppercase tracking-wider px-1">
+              <span>Repository</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             </div>
-            <div className="flex items-center gap-2">
-              <FaGitAlt className="text-text-secondary flex-shrink-0" />
-              <span className="text-xs text-text font-semibold truncate select-text">{repoName || 'fastapi'}</span>
+
+            <div className="relative">
+              <button
+                onClick={() => setIsRepoDropdownOpen(!isRepoDropdownOpen)}
+                className="w-full bg-surface border border-white/10 hover:border-primary/40 rounded-lg p-2.5 flex items-center justify-between transition-all cursor-pointer text-left"
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <div className="w-6 h-6 rounded bg-primary/10 border border-primary/20 flex items-center justify-center text-primary flex-shrink-0">
+                    <FaGitAlt size={12} />
+                  </div>
+                  <div className="flex flex-col truncate">
+                    <span className="text-xs text-text font-bold truncate">
+                      {activeRepo ? activeRepo.name : (repoName || 'fastapi')}
+                    </span>
+                    <span className="text-[9px] text-text-secondary truncate">
+                      {activeRepo ? `${activeRepo.is_private ? 'Private' : 'Public'} • Multi-Tenant` : (repoUrl || 'Default Workspace')}
+                    </span>
+                  </div>
+                </div>
+                <FaChevronDown size={10} className={`text-text-secondary transition-transform ${isRepoDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Repositories Dropdown */}
+              <AnimatePresence>
+                {isRepoDropdownOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="absolute top-full left-0 right-0 mt-1.5 bg-[#0D0D0D] border border-white/10 rounded-lg shadow-2xl p-1.5 z-50 space-y-1 max-h-48 overflow-y-auto"
+                  >
+                    <div className="text-[9px] uppercase font-bold text-text-secondary/60 px-2 py-1">
+                      Your Indexed Repositories ({userRepos.length})
+                    </div>
+                    {userRepos.length === 0 ? (
+                      <div className="text-[10px] text-text-secondary/50 px-2 py-1.5 italic">
+                        {currentUser ? 'No repositories indexed yet.' : 'Sign in to sync your repositories.'}
+                      </div>
+                    ) : (
+                      userRepos.map((repo) => (
+                        <button
+                          key={repo.id}
+                          onClick={() => {
+                            selectRepository(repo);
+                            setIsRepoDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-2.5 py-1.5 rounded text-xs flex items-center justify-between transition-all cursor-pointer ${
+                            activeRepo?.id === repo.id
+                              ? 'bg-primary/10 text-primary border border-primary/20 font-bold'
+                              : 'text-text-secondary hover:text-text hover:bg-white/5'
+                          }`}
+                        >
+                          <span className="truncate max-w-[160px]">{repo.name}</span>
+                          <span className="text-[8px] uppercase tracking-wider text-text-secondary/60">
+                            {new Date(repo.indexed_at || repo.created_at).toLocaleDateString()}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                    <button
+                      onClick={() => {
+                        setIsRepoDropdownOpen(false);
+                        resetAll();
+                        onNavigate('setup');
+                      }}
+                      className="w-full mt-1 pt-1 border-t border-white/5 flex items-center justify-center gap-1.5 py-1.5 text-[10px] text-primary hover:text-primary-hover font-bold uppercase tracking-wider cursor-pointer"
+                    >
+                      <FaPlus size={8} /> Index New Repo
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-            <div className="text-[10px] text-text-secondary/60 truncate select-text">
-              {repoUrl || 'https://github.com/tiangolo/fastapi'}
-            </div>
-            <button
-              onClick={() => {
-                resetAll();
-                onNavigate('setup');
-              }}
-              className="w-full text-center py-1.5 mt-2 bg-black/40 border border-white/10 hover:border-primary/45 rounded text-[10px] text-text-secondary hover:text-primary transition-all font-bold uppercase tracking-wider cursor-pointer"
-            >
-              New Repository
-            </button>
           </div>
 
-          {/* Previous Questions */}
-          <div className="flex-1 space-y-2">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-text-secondary block px-1">Previous Questions</span>
-            <div className="space-y-1 max-h-[25vh] overflow-y-auto">
-              {previousQuestions.length === 0 ? (
-                <span className="text-[10px] text-text-secondary/40 italic px-2 block">No previous queries.</span>
+          {/* New Chat Button */}
+          <button
+            onClick={() => createNewConversation(activeRepo?.id, 'New Conversation')}
+            className="w-full flex items-center justify-center gap-2 py-2.5 bg-gradient-to-r from-primary/15 via-primary/25 to-primary/15 border border-primary/30 hover:border-primary/60 text-primary hover:text-primary-hover rounded-lg text-xs font-bold transition-all shadow-[0_0_12px_rgba(212,175,55,0.1)] cursor-pointer"
+          >
+            <FaPlus size={10} />
+            <span>New Chat Session</span>
+          </button>
+
+          {/* Conversation History Threads */}
+          <div className="flex-1 flex flex-col min-h-0 space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-text-secondary flex items-center gap-1.5">
+                <FaComments size={10} className="text-primary/70" />
+                Chat Threads
+              </span>
+              <span className="text-[9px] text-text-secondary/50 font-mono">
+                {conversations.length}
+              </span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-1 pr-1 max-h-[35vh]">
+              {conversations.length === 0 ? (
+                <div className="text-center py-4 px-2 border border-dashed border-white/5 rounded-lg bg-surface/30">
+                  <span className="text-[10px] text-text-secondary/40 italic block">
+                    No conversation threads yet.
+                  </span>
+                </div>
               ) : (
-                previousQuestions.map((q, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => {
-                      if (!isChatLoading) sendQuery(q);
-                    }}
-                    className="w-full text-left px-2.5 py-2 hover:bg-surface border border-transparent hover:border-white/5 rounded text-xs text-text-secondary/80 hover:text-text truncate transition-all cursor-pointer block"
-                  >
-                    {q}
-                  </button>
-                ))
+                conversations.map((conv) => {
+                  const isActive = activeConversation?.id === conv.id;
+                  return (
+                    <div
+                      key={conv.id}
+                      className={`group relative flex items-center justify-between px-3 py-2 rounded-lg border text-xs transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-surface border-primary/30 text-text font-semibold shadow-[0_0_10px_rgba(212,175,55,0.06)]'
+                          : 'border-transparent text-text-secondary hover:text-text hover:bg-surface/60'
+                      }`}
+                      onClick={() => selectConversation(conv)}
+                    >
+                      <div className="flex items-center gap-2 truncate pr-6">
+                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'bg-primary shadow-[0_0_6px_#D4AF37]' : 'bg-white/20'}`} />
+                        <span className="truncate">{conv.title || 'Untitled Thread'}</span>
+                      </div>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteConversation(conv.id);
+                        }}
+                        title="Delete Thread"
+                        className="opacity-0 group-hover:opacity-100 hover:text-rose-400 text-text-secondary/50 p-1 transition-opacity cursor-pointer flex-shrink-0"
+                      >
+                        <FaTrashAlt size={10} />
+                      </button>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
@@ -194,7 +284,7 @@ export const ChatDashboard = ({ onNavigate }) => {
             className="w-full flex items-center justify-center gap-2 py-2 border border-white/5 hover:border-rose-500/25 bg-surface text-text-secondary hover:text-rose-400 rounded text-xs transition-colors disabled:opacity-40 cursor-pointer"
           >
             <FaTrashAlt size={11} />
-            Clear Chat
+            Clear Messages
           </button>
           
           <button
@@ -202,7 +292,7 @@ export const ChatDashboard = ({ onNavigate }) => {
             className="w-full flex items-center justify-center gap-2 py-2 border border-white/5 hover:border-white/20 bg-surface text-text-secondary hover:text-text rounded text-xs transition-colors cursor-pointer"
           >
             <FaArrowLeft size={10} />
-            Back to Landing
+            Back to Home
           </button>
         </div>
       </aside>
@@ -225,9 +315,9 @@ export const ChatDashboard = ({ onNavigate }) => {
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'tween', duration: 0.25 }}
-              className="relative w-64 bg-background border-r border-white/5 flex flex-col justify-between h-full z-10 p-4 select-none animate-fade-in"
+              className="relative w-72 bg-background border-r border-white/5 flex flex-col justify-between h-full z-10 p-4 select-none"
             >
-              <div className="flex flex-col flex-1 overflow-y-auto space-y-6">
+              <div className="flex flex-col flex-1 overflow-y-auto space-y-5">
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-2">
                     <span className="text-primary font-bold text-base bg-primary/10 px-2 py-0.5 rounded border border-primary/20">CG</span>
@@ -242,11 +332,11 @@ export const ChatDashboard = ({ onNavigate }) => {
                 </div>
                 
                 {/* Active Repo Details */}
-                <div className="bg-surface border border-white/5 rounded-lg p-3.5 space-y-2">
+                <div className="bg-surface border border-white/5 rounded-lg p-3 space-y-2">
                   <span className="text-[10px] font-bold text-primary uppercase tracking-wider block">Active Repository</span>
                   <div className="flex items-center gap-2">
                     <FaGitAlt className="text-text-secondary flex-shrink-0" />
-                    <span className="text-xs text-text font-semibold truncate select-text">{repoName || 'fastapi'}</span>
+                    <span className="text-xs text-text font-semibold truncate select-text">{activeRepo?.name || repoName || 'fastapi'}</span>
                   </div>
                   <button
                     onClick={() => {
@@ -256,30 +346,44 @@ export const ChatDashboard = ({ onNavigate }) => {
                     }}
                     className="w-full text-center py-1.5 mt-2 bg-black/40 border border-white/10 rounded text-[10px] text-text-secondary hover:text-primary transition-all font-bold uppercase tracking-wider cursor-pointer"
                   >
-                    New Repository
+                    + Index New Repo
                   </button>
                 </div>
 
-                {/* Previous Questions */}
+                {/* New Chat Button */}
+                <button
+                  onClick={() => {
+                    createNewConversation(activeRepo?.id, 'New Conversation');
+                    setIsMobileSidebarOpen(false);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-2 bg-primary/15 border border-primary/30 text-primary rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  <FaPlus size={10} />
+                  <span>New Chat</span>
+                </button>
+
+                {/* Conversation Threads */}
                 <div className="flex-1 space-y-2">
-                  <span className="text-[10px] uppercase font-bold tracking-wider text-text-secondary block px-1">Previous Questions</span>
-                  <div className="space-y-1">
-                    {previousQuestions.length === 0 ? (
-                      <span className="text-[10px] text-text-secondary/40 italic block px-1">No previous queries.</span>
-                    ) : (
-                      previousQuestions.map((q, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => {
-                            setIsMobileSidebarOpen(false);
-                            if (!isChatLoading) sendQuery(q);
-                          }}
-                          className="w-full text-left px-2.5 py-2 hover:bg-surface border border-transparent hover:border-white/5 rounded text-xs text-text-secondary/85 hover:text-text truncate transition-all cursor-pointer block"
-                        >
-                          {q}
-                        </button>
-                      ))
-                    )}
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-text-secondary block px-1">
+                    Chat Threads ({conversations.length})
+                  </span>
+                  <div className="space-y-1 max-h-[30vh] overflow-y-auto">
+                    {conversations.map((conv) => (
+                      <button
+                        key={conv.id}
+                        onClick={() => {
+                          selectConversation(conv);
+                          setIsMobileSidebarOpen(false);
+                        }}
+                        className={`w-full text-left px-2.5 py-2 rounded text-xs truncate transition-all cursor-pointer block ${
+                          activeConversation?.id === conv.id
+                            ? 'bg-surface border border-primary/30 text-text font-bold'
+                            : 'text-text-secondary hover:text-text hover:bg-surface/50'
+                        }`}
+                      >
+                        {conv.title || 'Untitled'}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -295,7 +399,7 @@ export const ChatDashboard = ({ onNavigate }) => {
                   className="w-full flex items-center justify-center gap-2 py-2 border border-white/5 bg-surface text-text-secondary hover:text-rose-400 rounded text-xs transition-colors disabled:opacity-40 cursor-pointer"
                 >
                   <FaTrashAlt size={11} />
-                  Clear Chat
+                  Clear Messages
                 </button>
               </div>
             </motion.aside>
@@ -314,7 +418,7 @@ export const ChatDashboard = ({ onNavigate }) => {
             <FaBars size={12} />
             <span>Workspace</span>
           </button>
-          <span className="text-xs font-mono text-text truncate max-w-[150px]">{repoName || 'fastapi'}</span>
+          <span className="text-xs font-mono text-text truncate max-w-[150px]">{activeRepo?.name || repoName || 'fastapi'}</span>
           <button
             onClick={() => setIsRightPanelOpen(!isRightPanelOpen)}
             className="text-xs text-text-secondary hover:text-primary border border-white/10 hover:border-primary/30 px-3 py-1.5 rounded bg-surface cursor-pointer"
@@ -326,19 +430,21 @@ export const ChatDashboard = ({ onNavigate }) => {
         {/* Chat Feed */}
         <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 space-y-6">
           {chatMessages.length === 0 ? (
-            /* Empty State: Ask anything about your repository. */
+            /* Empty State */
             <div className="h-full flex flex-col justify-center items-center text-center max-w-xl mx-auto space-y-6 animate-fade-in">
-              <div className="w-16 h-16 rounded-full bg-primary/5 border border-primary/20 flex items-center justify-center text-primary gold-border-pulse">
+              <div className="w-16 h-16 rounded-full bg-primary/5 border border-primary/20 flex items-center justify-center text-primary gold-border-pulse shadow-[0_0_20px_rgba(212,175,55,0.15)]">
                 <IoTerminalSharp size={28} />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-text mb-1.5 select-text">Ask anything about your repository.</h3>
+                <h3 className="text-lg font-bold text-text mb-1.5 select-text">
+                  Ask anything about <span className="text-primary">{activeRepo?.name || repoName || 'your repository'}</span>
+                </h3>
                 <p className="text-xs text-text-secondary leading-relaxed max-w-sm select-text">
-                  Enter questions about call stacks, class layouts, functions, dependencies, or architectural flows. CodeGraphAI utilizes AST-Graph retrieval.
+                  CodeGraphAI uses AST Parsing, Multi-Tenant Vector Search, Neo4j Graph Partitioning, and Conversational Memory to reason over code.
                 </p>
               </div>
 
-              {/* Sample queries */}
+              {/* Sample Multi-turn Queries */}
               <div className="grid grid-cols-1 gap-2.5 w-full max-w-md">
                 {[
                   `How does the APIRouter get initialized?`,
@@ -351,10 +457,10 @@ export const ChatDashboard = ({ onNavigate }) => {
                       setInputVal(sample);
                       textareaRef.current?.focus();
                     }}
-                    className="text-left px-4 py-2.5 bg-surface border border-white/5 hover:border-primary/20 text-xs text-text-secondary hover:text-text rounded-lg transition-colors flex justify-between items-center cursor-pointer"
+                    className="text-left px-4 py-2.5 bg-surface border border-white/5 hover:border-primary/30 text-xs text-text-secondary hover:text-text rounded-lg transition-colors flex justify-between items-center cursor-pointer group"
                   >
                     <span>{sample}</span>
-                    <FaChevronRight size={10} className="text-primary/45" />
+                    <FaChevronRight size={10} className="text-primary/45 group-hover:translate-x-1 transition-transform" />
                   </button>
                 ))}
               </div>
@@ -372,12 +478,24 @@ export const ChatDashboard = ({ onNavigate }) => {
                       {msg.sender === 'user' ? 'You' : 'CodeGraphAI'}
                     </span>
                     <span className="text-[8px] text-text-secondary/40">
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                     </span>
                   </div>
 
                   {/* Message Bubble */}
                   <div className={`px-4 py-3 rounded-lg border text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-white/3 border-white/5' : 'bg-surface border-white/5 shadow-md'}`}>
+                    
+                    {/* Render Multi-Turn Query Reformulation Badge */}
+                    {msg.sender === 'assistant' && msg.contextualized_query && (
+                      <div className="mb-3 px-3 py-1.5 bg-primary/5 border border-primary/20 rounded-md text-[11px] text-text-secondary flex items-center gap-2 select-none">
+                        <IoSparklesSharp size={12} className="text-primary flex-shrink-0 animate-pulse" />
+                        <span className="text-[10px] uppercase font-bold text-primary tracking-wider">Resolved Intent:</span>
+                        <span className="text-text/90 italic truncate font-mono text-[10px]">
+                          "{msg.contextualized_query}"
+                        </span>
+                      </div>
+                    )}
+
                     {/* Render Intent & Strategy Metadata */}
                     {msg.sender === 'assistant' && msg.intent && (
                       <div className="flex flex-wrap items-center gap-2 mb-3 bg-black/30 border border-white/5 px-3 py-1.5 rounded-md text-xs select-none">
@@ -455,7 +573,7 @@ export const ChatDashboard = ({ onNavigate }) => {
                                     className="flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-white/1"
                                   >
                                     <div className="flex flex-col gap-0.5 truncate pr-4">
-                                      <span className="text-[11px] font-bold text-text truncate select-text">{source.file_path.split('\\').pop().split('/').pop()}</span>
+                                      <span className="text-[11px] font-bold text-text truncate select-text">{source.file_path ? source.file_path.split('\\').pop().split('/').pop() : 'Unknown File'}</span>
                                       <span className="text-[9px] text-text-secondary truncate select-text">{source.file_path}</span>
                                     </div>
                                     
@@ -506,16 +624,14 @@ export const ChatDashboard = ({ onNavigate }) => {
             </div>
           )}
 
-          {/* Typing Indicator & Premium Skeleton Loader */}
+          {/* Typing Indicator & Skeleton Loader */}
           {isChatLoading && (
             <div className="space-y-4 max-w-3xl mx-auto select-none mt-4">
-              {/* Typing Indicator */}
               <div className="flex items-center gap-3 px-4 py-2 bg-surface border border-white/5 rounded-lg max-w-xs mx-auto animate-pulse">
                 <VscLoading className="animate-spin text-primary text-base flex-shrink-0" />
-                <span className="text-xs text-text-secondary font-medium">Analyzing database and files...</span>
+                <span className="text-xs text-text-secondary font-medium">Resolving context & reasoning...</span>
               </div>
               
-              {/* Skeleton response box */}
               <div className="flex flex-col gap-2 animate-pulse">
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded bg-white/5 border border-white/10" />
@@ -525,15 +641,6 @@ export const ChatDashboard = ({ onNavigate }) => {
                   <div className="h-3.5 bg-white/10 rounded w-3/4" />
                   <div className="h-3.5 bg-white/10 rounded w-5/6" />
                   <div className="h-3.5 bg-white/10 rounded w-2/3" />
-                  
-                  {/* Sources Skeletons */}
-                  <div className="pt-4 border-t border-white/5 space-y-2 mt-4">
-                    <div className="h-3 bg-white/10 rounded w-28" />
-                    <div className="grid grid-cols-1 gap-2">
-                      <div className="h-10 bg-black/40 border border-white/5 rounded-lg" />
-                      <div className="h-10 bg-black/40 border border-white/5 rounded-lg" />
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -550,7 +657,7 @@ export const ChatDashboard = ({ onNavigate }) => {
               value={inputVal}
               onChange={(e) => setInputVal(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask a question about the repository structures, symbol usages, or functions..."
+              placeholder="Ask a question, follow-up, or trace dependencies across symbols..."
               disabled={isChatLoading}
               className="w-full py-3 pl-4 pr-12 bg-surface border border-white/10 focus:border-primary/50 text-sm text-text rounded-xl focus:outline-none resize-none overflow-y-auto leading-relaxed select-text placeholder:text-text-secondary/55"
             />
@@ -563,7 +670,7 @@ export const ChatDashboard = ({ onNavigate }) => {
             </button>
           </form>
           <div className="text-[10px] text-text-secondary/35 text-center mt-2">
-            Press Enter to Send • Shift+Enter for New Line • Dynamic AST retrieval active
+            Press Enter to Send • Shift+Enter for New Line • Multi-turn conversational memory active
           </div>
         </div>
       </div>
@@ -600,7 +707,7 @@ export const ChatDashboard = ({ onNavigate }) => {
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {activeRelations.length === 0 ? (
-                /* Empty state: No GraphRAG relationships available. */
+                /* Empty state */
                 <div className="h-full flex flex-col justify-center items-center text-center p-6 space-y-3 select-none">
                   <FaNetworkWired size={24} className="text-text-secondary/20 animate-pulse" />
                   <div>
@@ -635,7 +742,7 @@ export const ChatDashboard = ({ onNavigate }) => {
                         </div>
 
                         <div className="text-[9px] text-text-secondary/60 font-mono truncate max-w-[210px] pl-1">
-                          in {rel.file_path.split('\\').pop().split('/').pop()}
+                          in {rel.file_path ? rel.file_path.split('\\').pop().split('/').pop() : 'symbol'}
                         </div>
                       </div>
                     ))}
