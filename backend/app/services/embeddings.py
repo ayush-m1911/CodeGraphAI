@@ -14,17 +14,16 @@ Interview Readiness Note:
   It computes embeddings extremely quickly locally, making it ideal for self-contained desktop search engines without requiring external cloud embeddings APIs.
 """
 
-from langchain_huggingface import HuggingFaceEmbeddings
-
 _embedding_model = None
 
 def get_embedding_model():
     """
     Lazily loads the BAAI/bge-small-en-v1.5 transformer model on first inference,
-    preventing server boot delays and port binding timeouts during startup.
+    preventing server boot delays, memory exhaustion, and port binding timeouts during startup.
     """
     global _embedding_model
     if _embedding_model is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
         _embedding_model = HuggingFaceEmbeddings(
             model_name="BAAI/bge-small-en-v1.5"
         )
