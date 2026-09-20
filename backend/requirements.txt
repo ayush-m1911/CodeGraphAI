@@ -34,6 +34,9 @@ sentence-transformers>=2.5.1
 torch>=2.2.0
 transformers>=4.38.0
 huggingface_hub>=0.21.0
+langchain-text-splitters>=0.2.0
+langchain-huggingface>=0.0.1
+langchain-core>=0.2.0
 
 # LLM & API Clients
 groq>=0.5.0

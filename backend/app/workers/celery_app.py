@@ -62,3 +62,7 @@ celery_app.conf.update(
     imports=["app.tasks.index_repository"]
 )
 
+# Aliases for CLI loader compatibility
+celery = celery_app
+app = celery_app
+
