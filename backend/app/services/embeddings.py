@@ -16,6 +16,25 @@ Interview Readiness Note:
 
 from langchain_huggingface import HuggingFaceEmbeddings
 
-embedding_model = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5"
-)
+_embedding_model = None
+
+def get_embedding_model():
+    """
+    Lazily loads the BAAI/bge-small-en-v1.5 transformer model on first inference,
+    preventing server boot delays and port binding timeouts during startup.
+    """
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-small-en-v1.5"
+        )
+    return _embedding_model
+
+class _LazyEmbeddingProxy:
+    """Transparent proxy that forwards calls to the lazily-loaded embedding model."""
+    def __getattr__(self, name):
+        model = get_embedding_model()
+        return getattr(model, name)
+
+# Global singleton proxy preserving backward compatibility with all callers
+embedding_model = _LazyEmbeddingProxy()

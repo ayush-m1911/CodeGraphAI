@@ -17,12 +17,13 @@ Centralizes variable binding and type casting. In production, variables are load
 (e.g., Docker Compose environment configurations), decoupling hardcoded credentials and addresses from application code.
 """
 
+from typing import Optional
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
-    qdrant_api_key: str = None
+    qdrant_api_key: Optional[str] = None
     collection_name: str = "repo_chunks"
     groq_api_key: str = ""
     redis_url: str = "redis://localhost:6379/0"
