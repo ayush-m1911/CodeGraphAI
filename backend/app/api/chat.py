@@ -13,60 +13,64 @@ Key Responsibilities:
 * Return structured response containing the generated text and referenced source blocks (with text, scores, and metadata) to the frontend.
 """
 
-from fastapi import APIRouter
-
-from app.models.schemas import (
-    QuestionRequest
-)
-
+from typing import Optional
+from fastapi import APIRouter, Depends, BackgroundTasks
+from app.models.schemas import QuestionRequest
+from app.models.db_models import User
+from app.api.auth_deps import get_current_user_optional
 from app.services.hybrid_retriever import hybrid_retrieve_detailed
-from app.services.llm import (
-    generate_answer
+from app.services.llm import generate_answer
+from app.services.memory_service import (
+    get_conversation_history,
+    contextualize_query,
+    async_save_chat_turn
 )
-
 
 router = APIRouter()
 
 
 @router.post("/chat")
 def chat(
-    payload: QuestionRequest
+    payload: QuestionRequest,
+    background_tasks: BackgroundTasks,
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """
-    Handles user queries about the code repository, executes hybrid context retrieval, and generates responses.
-
-    Workflow:
-    1. Extract question from request payload.
-    2. Invoke Intent-Aware Retrieval Orchestrator via hybrid_retrieve_detailed.
-    3. Feed context chunks, question, intent, and strategies to LLM generator.
-    4. Compile list of sources indicating file path, symbol, type, relation, score, and code text.
-    5. Return finalized answer, intent, strategies, and source blocks.
-
-    Args:
-        payload (QuestionRequest): Payload containing the user's question.
-
-    Returns:
-        dict: A dictionary containing "answer" (str), "intent" (str), "retrieval_strategy" (list of str), and "sources" (list of dicts).
+    Handles multi-turn conversational code queries:
+    1. Retrieves sliding window history (K=6 turns) from PostgreSQL.
+    2. Resolves co-references and contextualizes query for vector & graph retrieval.
+    3. Executes multi-tenant hybrid retrieval and LLM generation.
+    4. Persists the question/answer turn asynchronously into PostgreSQL.
     """
+    user_id = str(current_user.id) if current_user else None
+    repo_id = payload.repository_id
+    conversation_id = payload.conversation_id
 
+    # 1. Multi-Turn History Retrieval (K=6)
+    history = []
+    search_query = payload.question
+    if conversation_id:
+        history = get_conversation_history(conversation_id, k=6)
+        # 2. Co-Reference Resolution
+        search_query = contextualize_query(history, payload.question)
+
+    # 3. Hybrid Vector & Graph Retrieval
     context, intent, strategies_used, confidence = hybrid_retrieve_detailed(
-        payload.question
+        search_query,
+        user_id=user_id,
+        repository_id=repo_id
     )
 
+    # 4. LLM Generation Grounded in Context + Multi-Turn History
     answer = generate_answer(
         context,
         payload.question,
         intent=intent,
-        strategies_used=strategies_used
+        strategies_used=strategies_used,
+        history=history
     )
 
-    return {
-    "answer": answer,
-    "intent": intent,
-    "retrieval_strategy": strategies_used,
-    "confidence": confidence,
-
-    "sources": [
+    sources = [
         {
             "file_path": c["file_path"],
             "symbol_name": c.get("symbol_name"),
@@ -76,8 +80,28 @@ def chat(
             "text": c.get("text", "")
         }
         for c in context
-
     ]
-}
+
+    # 5. Non-blocking Asynchronous Persistence into PostgreSQL
+    if conversation_id:
+        background_tasks.add_task(
+            async_save_chat_turn,
+            conversation_id=conversation_id,
+            user_question=payload.question,
+            assistant_answer=answer,
+            retrieval_strategy=", ".join(strategies_used) if strategies_used else "hybrid",
+            sources=sources,
+            token_count=len(answer.split())
+        )
+
+    return {
+        "answer": answer,
+        "intent": intent,
+        "retrieval_strategy": strategies_used,
+        "confidence": confidence,
+        "contextualized_query": search_query,
+        "sources": sources
+    }
+
 
 

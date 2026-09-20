@@ -15,7 +15,12 @@ Key Responsibilities:
 
 from fastapi import FastAPI
 from fastapi import APIRouter
+from contextlib import asynccontextmanager
 from app.config import settings
+from app.database import init_db
+from app.api.auth import router as auth_router
+from app.api.repositories import router as repositories_router
+from app.api.conversations import router as conversations_router
 from app.api.ingest import router as ingest_router
 from app.api.parser import router as parser_router
 from app.api.chunk import router as chunk_router
@@ -27,9 +32,21 @@ from app.api.tree import router as tree_router
 
 from fastapi.middleware.cors import CORSMiddleware
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize relational database tables on application startup
+    try:
+        init_db()
+    except Exception as e:
+        print(f"[CodeGraphAI Warning] Database initialization deferred: {e}")
+    yield
+
+
 app = FastAPI(
     title="CodeGraphAI",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -40,6 +57,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Authentication & Tenant History Routers
+app.include_router(auth_router)
+app.include_router(repositories_router)
+app.include_router(conversations_router)
+
+# Ingestion, Indexing, and Search Routers
 app.include_router(ingest_router)
 app.include_router(parser_router)
 app.include_router(chunk_router)
@@ -49,6 +72,7 @@ app.include_router(index_router)
 app.include_router(chat_router)
 app.include_router(tree_router)
 router = APIRouter()
+
 
 @app.get("/")
 def root():

@@ -41,27 +41,23 @@ def generate_answer(
     context,
     question,
     intent=None,
-    strategies_used=None
+    strategies_used=None,
+    history=None
 ):
     """
-    Generates a developer-targeted answer for the codebase question based on the retrieved contexts.
-
-    Workflow:
-    1. Filter and format context chunks (file paths, symbols, relation details, code snippets) up to character boundaries.
-    2. Construct structured instructions enforcing definitions, files, call flows, and related components list.
-    3. Include intent and strategies_used metadata in the prompt to assist reasoning.
-    4. Make a chat completion call to Groq with llama-3.3-70b-versatile.
-    5. If it fails, compile an AST structural explanation locally based on retrieved context metadata to prevent runtime errors.
+    Generates a developer-targeted answer for the codebase question based on the retrieved contexts and multi-turn history.
 
     Args:
         context (list of dict): Code context chunks retrieved by the retrieval phase.
         question (str): User's question about the repository.
         intent (str, optional): The detected user intent.
         strategies_used (list of str, optional): The retrieval strategies executed.
+        history (list of dict, optional): Prior conversation turns [{"role": "user"|"assistant", "content": "..."}].
 
     Returns:
         str: Grounded response answer in markdown formatting.
     """
+
 
     MAX_CONTEXT_CHARS = 7000
 
@@ -113,63 +109,38 @@ Intent: {intent}
 Retrieval Strategy: {", ".join(strategies_used or [])}
 """
 
-    prompt = f"""
-You are an expert software architect.
+    system_instruction = (
+        "You are CodeGraphAI, an expert codebase intelligence and software architect assistant. "
+        "You analyze source code repositories using AST parsing, vector search, and Neo4j knowledge graphs. "
+        "You provide clear, accurate, and architectural explanations. "
+        "Ground codebase-specific technical answers in the retrieved repository context chunks. "
+        "For multi-turn conversational follow-ups, questions about earlier responses, or contextual queries, "
+        "seamlessly leverage both the preceding conversation dialogue history and the repository context."
+    )
 
-You are analyzing a source code repository.
-
-You must use ONLY the provided repository context.
-{intent_metadata_block}
+    prompt = f"""{intent_metadata_block}
 ------------------------------------------------
-
-Repository Context:
-
-{context_text}
-
+Retrieved Repository Context:
+{context_text if context_text.strip() else "(No new repository context chunks retrieved for this turn; use codebase knowledge & prior conversation dialogue history.)"}
 ------------------------------------------------
-
 Question:
-
 {question}
-
 ------------------------------------------------
-
 Instructions:
-
-1. Explain where the requested class, function, or method is defined.
-
-2. Mention the exact file names involved.
-
-3. Use graph relationships when available.
-
-4. Explain call flows.
-
-5. Explain parent-child relationships.
-
-6. Explain dependencies.
-
-7. Explain how components interact.
-
-8. If multiple files participate, explain the chain.
-
-9. Prefer architectural explanations over code dumping.
-
-10. If information is missing from context, explicitly say so.
-
-------------------------------------------------
+1. Ground technical explanations in the provided code context and ongoing conversation history.
+2. If the user is asking a follow-up, summary, or meta-question regarding earlier responses or topics in the chat, synthesize a clear, helpful answer referencing prior discussion.
+3. Mention relevant file paths and symbol names when discussing codebase components.
+4. Prefer architectural clarity and call flows over raw code dumping.
+5. If specific codebase information is completely missing and cannot be answered from conversation history, concisely state what is missing.
 
 Response Format:
-
-Definition:
+Definition / Overview:
 ...
 
-Files:
+Files & Key Components:
 ...
 
-Call Flow:
-...
-
-Related Components:
+Call Flow / Architecture:
 ...
 
 Summary:
@@ -181,20 +152,51 @@ Summary:
     print("=" * 80)
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0
-        )
+        messages = [{"role": "system", "content": system_instruction}]
+        if history:
+            for turn in history:
+                messages.append({
+                    "role": turn.get("role", "user"),
+                    "content": turn.get("content", "")
+                })
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
 
-        return response.choices[
-            0
-        ].message.content
+        # Prioritize configured openai/gpt-oss-120b model with resilient fallbacks
+        primary_model = getattr(settings, "llm_model", "openai/gpt-oss-120b")
+        model_candidates = [
+            primary_model,
+            "openai/gpt-oss-120b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "llama3-8b-8192"
+        ]
+        # Deduplicate while preserving order
+        unique_models = []
+        for m in model_candidates:
+            if m not in unique_models:
+                unique_models.append(m)
+
+        response = None
+        for model_name in unique_models:
+            try:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0
+                )
+                if response and response.choices:
+                    return response.choices[0].message.content
+            except Exception:
+                continue
+
+        raise RuntimeError("All LLM model candidates failed")
+
+
     except Exception as e:
         print(f"Groq API call failed: {e}. Generating context-based fallback response.")
         
