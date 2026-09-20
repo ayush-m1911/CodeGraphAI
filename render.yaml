@@ -1,9 +1,9 @@
-# Render Blueprint Configuration for CodeGraphAI
+# Render Blueprint Configuration for CodeGraphAI (100% Free Tier)
 # https://render.com/docs/blueprint-spec
 
 services:
   # --------------------------------------------------
-  # 1. Frontend: React/Vite Static Site
+  # 1. Frontend: React/Vite Static Site (100% Free Forever)
   # --------------------------------------------------
   - type: web
     name: codegraphai-frontend
@@ -23,14 +23,15 @@ services:
           property: host
 
   # --------------------------------------------------
-  # 2. Backend: FastAPI Web Service
+  # 2. Backend: FastAPI + Celery Worker (Free Tier Web Service)
   # --------------------------------------------------
   - type: web
     name: codegraphai-backend
     runtime: python
+    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: bash start.sh
     healthCheckPath: /
     envVars:
       - key: DATABASE_URL
@@ -62,51 +63,15 @@ services:
         generateValue: true
 
   # --------------------------------------------------
-  # 3. Celery Ingestion Worker: Background Worker
-  # --------------------------------------------------
-  - type: worker
-    name: codegraphai-celery-worker
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.workers.celery_app.celery worker --loglevel=info --concurrency=2
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: codegraphai-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: codegraphai-redis
-          property: connectionString
-      - key: GROQ_API_KEY
-        sync: false
-      - key: LLM_MODEL
-        value: openai/gpt-oss-120b
-      - key: COLLECTION_NAME
-        value: repo_chunks
-      - key: QDRANT_URL
-        sync: false
-      - key: QDRANT_API_KEY
-        sync: false
-      - key: NEO4J_URI
-        sync: false
-      - key: NEO4J_USER
-        value: neo4j
-      - key: NEO4J_PASSWORD
-        sync: false
-
-  # --------------------------------------------------
-  # 4. Managed Redis Instance
+  # 3. Redis Instance (Free Tier)
   # --------------------------------------------------
   - type: redis
     name: codegraphai-redis
-    ipAllowList: []
     plan: free
+    ipAllowList: []
 
 # ----------------------------------------------------
-# 5. Managed PostgreSQL Database
+# 4. PostgreSQL Database (Free Tier)
 # ----------------------------------------------------
 databases:
   - name: codegraphai-db
