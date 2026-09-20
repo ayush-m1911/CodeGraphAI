@@ -21,7 +21,6 @@ services:
           type: web
           name: codegraphai-backend
           property: host
-          envVarKey: RENDER_EXTERNAL_URL
 
   # --------------------------------------------------
   # 2. Backend: FastAPI Web Service
